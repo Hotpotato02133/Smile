@@ -73,3 +73,60 @@ export function getErrorMessage(error: unknown, fallback = "Something went wrong
   }
   return fallback;
 }
+
+export function getErrorCode(error: unknown): string | null {
+  if (error instanceof ConvexError) {
+    const data = error.data as { code?: string } | undefined;
+    if (data && typeof data === "object" && typeof data.code === "string") {
+      return data.code;
+    }
+  }
+  return null;
+}
+
+export const DAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+export const DAY_SHORT_NAMES = [
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat",
+] as const;
+
+/** Converts minutes from midnight (0–1439) to `"HH:MM"` for `<input type="time">`. */
+export function minutesToTimeInput(minutes: number): string {
+  const clamped = Math.max(0, Math.min(1439, Math.round(minutes)));
+  const hh = String(Math.floor(clamped / 60)).padStart(2, "0");
+  const mm = String(clamped % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+/** Converts `"HH:MM"` to integer minutes from midnight (0–1439). */
+export function timeInputToMinutes(value: string, fallback = 540): number {
+  const [hStr, mStr] = value.split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (Number.isNaN(h) || Number.isNaN(m)) return fallback;
+  return Math.max(0, Math.min(1439, h * 60 + m));
+}
+
+/** Formats minutes from midnight as `"9:00 AM"`. */
+export function formatMinutes12h(minutes: number): string {
+  const clamped = Math.max(0, Math.min(1439, Math.round(minutes)));
+  const h24 = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  const suffix = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
+}

@@ -13,6 +13,7 @@ import type {
   FilterApi,
   FunctionReference,
 } from "convex/server";
+import type * as clinicAdmin from "../clinicAdmin.js";
 import type * as http from "../http.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_permissions from "../lib/permissions.js";
@@ -32,6 +33,7 @@ import type * as users from "../users.js";
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  clinicAdmin: typeof clinicAdmin;
   http: typeof http;
   "lib/audit": typeof lib_audit;
   "lib/permissions": typeof lib_permissions;

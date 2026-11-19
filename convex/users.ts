@@ -20,10 +20,23 @@ export const upsertFromClerk = internalMutation({
     const email = args.email.trim().toLowerCase();
     const superAdminEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
 
-    const existing = await ctx.db
+    const existingByClerk = await ctx.db
       .query("users")
       .withIndex("by_clerk_id", (q) => q.eq("clerkId", args.clerkId))
       .unique();
+
+    // If a clinic admin pre-created a dentist profile before Clerk sign-up, claim that row
+    // so `dentists.userId` stays linked to the real user account.
+    const existingByEmail = existingByClerk
+      ? null
+      : (
+          await ctx.db
+            .query("users")
+            .withIndex("by_email", (q) => q.eq("email", email))
+            .collect()
+        ).find((u) => u.clerkId.startsWith("pending:"));
+
+    const existing = existingByClerk ?? existingByEmail ?? null;
 
     let role = existing?.role ?? ("patient" as const);
     let clinicId = existing?.clinicId;
@@ -47,6 +60,7 @@ export const upsertFromClerk = internalMutation({
     }
 
     const fields = {
+      clerkId: args.clerkId,
       email,
       firstName: args.firstName,
       lastName: args.lastName,
@@ -57,10 +71,12 @@ export const upsertFromClerk = internalMutation({
     };
 
     if (existing) {
-      await ctx.db.patch(existing._id, fields);
+      await ctx.db.patch(existing._id, {
+        ...fields,
+        isActive: existingByEmail ? true : existing.isActive,
+      });
     } else {
       await ctx.db.insert("users", {
-        clerkId: args.clerkId,
         ...fields,
         isActive: true,
         createdAt: now,
