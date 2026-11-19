@@ -338,6 +338,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_clinic_and_user", ["clinicId", "userId"])
+    .index("by_user", ["userId"])
     .index("by_clinic_and_phone", ["clinicId", "phone"])
     .index("by_clinic_and_recall", ["clinicId", "nextRecallDate"])
     .index("by_guardian", ["guardianPatientId"]),
