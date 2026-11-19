@@ -13,13 +13,16 @@ import type {
   FilterApi,
   FunctionReference,
 } from "convex/server";
+import type * as appointments from "../appointments.js";
 import type * as availability from "../availability.js";
 import type * as clinicAdmin from "../clinicAdmin.js";
+import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_permissions from "../lib/permissions.js";
 import type * as lib_scheduling from "../lib/scheduling.js";
 import type * as lib_serviceCatalog from "../lib/serviceCatalog.js";
+import type * as odontogram from "../odontogram.js";
 import type * as platformAnalytics from "../platformAnalytics.js";
 import type * as publicBooking from "../publicBooking.js";
 import type * as seed from "../seed.js";
@@ -37,13 +40,16 @@ import type * as users from "../users.js";
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  appointments: typeof appointments;
   availability: typeof availability;
   clinicAdmin: typeof clinicAdmin;
+  files: typeof files;
   http: typeof http;
   "lib/audit": typeof lib_audit;
   "lib/permissions": typeof lib_permissions;
   "lib/scheduling": typeof lib_scheduling;
   "lib/serviceCatalog": typeof lib_serviceCatalog;
+  odontogram: typeof odontogram;
   platformAnalytics: typeof platformAnalytics;
   publicBooking: typeof publicBooking;
   seed: typeof seed;
