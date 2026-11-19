@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type MutationCtx, mutation, query } from "./_generated/server";
 import { recordAuditLog, toManilaMonthKey } from "./lib/audit";
@@ -640,7 +641,7 @@ export const transitionStatus = mutation({
       }
     }
 
-    // Check standby waitlist on cancellation
+    // Check standby waitlist & schedule Resend opening blast on cancellation
     if (args.status === "cancelled" && clinic.featureFlags.waitlistAutomationEnabled) {
       const waitingEntries = await ctx.db
         .query("waitlist")
@@ -655,10 +656,18 @@ export const transitionStatus = mutation({
         (w) =>
           !w.preferredDentistId || w.preferredDentistId === appt.dentistId
       );
-      for (const entry of matching) {
-        await ctx.db.patch(entry._id, { status: "notified" });
+      waitlistMatchedCount = Math.min(matching.length, 5);
+      if (waitlistMatchedCount > 0) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.waitlist.notifyWaitlistForCancellation,
+          {
+            clinicId,
+            dateKey: appt.dateKey,
+            dentistId: appt.dentistId,
+          }
+        );
       }
-      waitlistMatchedCount = matching.length;
     }
 
     return {

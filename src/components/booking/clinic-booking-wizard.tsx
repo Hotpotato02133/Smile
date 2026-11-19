@@ -152,6 +152,8 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
   const createOnlineBooking = useMutation(
     api.publicBooking.createOnlineBooking
   );
+  const joinWaitlist = useMutation(api.waitlist.joinWaitlist);
+  const [joiningWaitlist, setJoiningWaitlist] = useState(false);
 
   const [sessionId] = useState<string>(() => getOrCreateSessionId());
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
@@ -607,9 +609,48 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
                         </AlertDescription>
                       </Alert>
                     ) : availability.slots.length === 0 ? (
-                      <div className="rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
-                        No open dentist & chair slots on {dateKey}. Try another
-                        date or choose &ldquo;First Available Dentist&rdquo;.
+                      <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                        <p>
+                          No open dentist & chair slots on {dateKey}. Try
+                          another date, choose &ldquo;First Available
+                          Dentist&rdquo;, or join the standby waitlist.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={joiningWaitlist}
+                          onClick={async () => {
+                            setJoiningWaitlist(true);
+                            try {
+                              await joinWaitlist({
+                                clinicId: clinic._id,
+                                serviceId: selectedService._id,
+                                preferredDentistId:
+                                  preferredDentistId === "any"
+                                    ? undefined
+                                    : preferredDentistId,
+                                preferredDateKey: dateKey,
+                                preferredTimeWindow: "any",
+                              });
+                              toast.success(
+                                `You're on the standby waitlist for ${dateKey}. We'll email you immediately if a slot opens.`
+                              );
+                            } catch (err) {
+                              toast.error(
+                                getErrorMessage(
+                                  err,
+                                  "Sign in or check if waitlist automation is enabled."
+                                )
+                              );
+                            } finally {
+                              setJoiningWaitlist(false);
+                            }
+                          }}
+                        >
+                          {joiningWaitlist
+                            ? "Joining Waitlist…"
+                            : "Join Standby Waitlist"}
+                        </Button>
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">

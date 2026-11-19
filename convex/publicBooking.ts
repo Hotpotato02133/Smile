@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { toManilaMonthKey } from "./lib/audit";
@@ -441,6 +442,13 @@ export const createOnlineBooking = mutation({
       updatedAt: now,
     });
 
+    // Fire Resend booking confirmation asynchronously (internalAction)
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendBookingConfirmation,
+      { appointmentId }
+    );
+
     const [dentist, chair] = await Promise.all([
       ctx.db.get(args.dentistId),
       ctx.db.get(args.chairId),
@@ -631,6 +639,17 @@ export const cancelMyAppointment = mutation({
       cancellationReason: args.reason?.trim() || "Cancelled by patient online",
       updatedAt: Date.now(),
     });
+
+    // Notify waitlisted patients asynchronously if waitlist automation is enabled
+    await ctx.scheduler.runAfter(
+      0,
+      internal.waitlist.notifyWaitlistForCancellation,
+      {
+        clinicId: appt.clinicId,
+        dateKey: appt.dateKey,
+        dentistId: appt.dentistId,
+      }
+    );
 
     return { cancelled: true };
   },
