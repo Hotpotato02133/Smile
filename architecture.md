@@ -6,7 +6,7 @@ The **Smile Dental Scheduling System** uses a serverless, reactive, multi-tenant
 
 | Architectural Tier | Component | Primary Function |
 | :--- | :--- | :--- |
-| **Edge & Routing Tier** | [Next.js Middleware](https://ui.shadcn.com/docs/installation/next) + [Clerk Middleware](https://clerk.com/docs/guides/secure/basic-rbac) | Inspects JWT session claims at the edge, enforces role-based route protection (`/super-admin`, `/admin`, `/front-desk`, `/staff`, `/patient`), and resolves public clinic slugs (`/c/[clinicSlug]`). |
+| **Edge & Routing Tier** | [Next.js Proxy (`src/proxy.ts`)](https://ui.shadcn.com/docs/installation/next) + [Clerk Middleware](https://clerk.com/docs/guides/secure/basic-rbac) | Inspects JWT session claims at the edge, enforces role-based route protection (`/super-admin`, `/admin`, `/front-desk`, `/staff`, `/patient`), and resolves public clinic slugs (`/c/[clinicSlug]`). |
 | **Client Reactive State** | `ConvexProviderWithClerk` ([Convex & Clerk](https://docs.convex.dev/auth/clerk)) | Maintains persistent WebSocket subscriptions so calendar changes, patient check-ins, and Super Admin metrics update across all connected browsers in real time ([Convex Pricing & Features](https://www.convex.dev/pricing)). |
 | **Transactional Compute Tier** | [Convex Queries & Mutations](https://www.convex.dev/compare/sql) | Executes ACID-compliant TypeScript transactions for slot calculation, conflict-free appointment booking, odontogram updates, and subscription enforcement. |
 | **Asynchronous & Scheduled Tier** | [Convex Scheduled Functions](https://docs.convex.dev/scheduling/scheduled-functions) & [Cron Jobs](https://docs.convex.dev/scheduling/cron-jobs) | Releases expired 5-minute booking holds, aggregates daily SaaS metrics, checks subscription expirations, and triggers [Resend](https://resend.com/pricing) emails via `internalAction`. |
@@ -151,9 +151,9 @@ Every clinic is linked to a `subscriptionPlans` document (`Trial`, `Starter`, `P
 
 | Path | Owned By Agent | Purpose |
 | :--- | :--- | :--- |
-| `convex/schema.ts` | Agent 1 (Schema & Auth) | Complete 16-table multi-tenant database schema and compound indexes ([Convex Limits](https://docs.convex.dev/production/state/limits)). |
-| `convex/auth.config.ts` & `convex/http.ts` | Agent 1 (Schema & Auth) | Clerk JWT issuer configuration and Svix webhook receiver (`/clerk-users-webhook`). |
-| `convex/lib/permissions.ts` | Agent 1 (Schema & Auth) | Centralized RBAC helpers (`requireSuperAdmin`, `requireClinicAccess`, quota gates). |
+| `convex/schema.ts` | Agent 1 (Schema & Auth) | Complete 19-table multi-tenant database schema and compound indexes ([Convex Limits](https://docs.convex.dev/production/state/limits)). |
+| `convex/auth.config.ts`, `convex/http.ts` & `src/proxy.ts` | Agent 1 (Schema & Auth) | Clerk JWT issuer configuration, Svix webhook receiver (`/clerk-users-webhook`), and Next.js 16 RBAC route proxy. |
+| `convex/lib/permissions.ts` | Agent 1 (Schema & Auth) | Centralized RBAC helpers (`requireSuperAdmin`, `requireClinicAccess`, `assertClinicCanWrite`, `assertClinicFeatureEnabled`). |
 | `convex/superAdmin.ts` & `convex/subscriptions.ts` | Agent 2 (Super Admin) | Multi-clinic provisioning, status toggles, subscription plans, and payment ledger mutations. |
 | `convex/platformAnalytics.ts` | Agent 2 (Super Admin) | Pre-aggregated MRR, clinic leaderboard, and free-tier quota utilization queries. |
 | `convex/availability.ts` & `convex/slotLocks.ts` | Agent 3 (Scheduling Engine) | Dual-resource (Dentist + Chair) slot calculation and 5-minute temporary slot holds ([Convex Scheduled Functions](https://docs.convex.dev/scheduling/scheduled-functions)). |

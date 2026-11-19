@@ -5,6 +5,7 @@ import { shadcn } from "@clerk/ui/themes";
 import { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { createContext, type ReactNode, useContext } from "react";
+import { Toaster } from "@/components/ui/sonner";
 
 const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() ?? "";
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim() ?? "";
@@ -56,6 +57,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     >
       <SetupNoticeBanner />
       {children}
+      <Toaster richColors position="top-right" />
     </EnvConfigContext.Provider>
   );
 

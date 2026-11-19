@@ -14,9 +14,13 @@ import type {
   FunctionReference,
 } from "convex/server";
 import type * as http from "../http.js";
+import type * as lib_audit from "../lib/audit.js";
 import type * as lib_permissions from "../lib/permissions.js";
 import type * as lib_serviceCatalog from "../lib/serviceCatalog.js";
+import type * as platformAnalytics from "../platformAnalytics.js";
 import type * as seed from "../seed.js";
+import type * as subscriptions from "../subscriptions.js";
+import type * as superAdmin from "../superAdmin.js";
 import type * as users from "../users.js";
 
 /**
@@ -29,9 +33,13 @@ import type * as users from "../users.js";
  */
 declare const fullApi: ApiFromModules<{
   http: typeof http;
+  "lib/audit": typeof lib_audit;
   "lib/permissions": typeof lib_permissions;
   "lib/serviceCatalog": typeof lib_serviceCatalog;
+  platformAnalytics: typeof platformAnalytics;
   seed: typeof seed;
+  subscriptions: typeof subscriptions;
+  superAdmin: typeof superAdmin;
   users: typeof users;
 }>;
 export declare const api: FilterApi<

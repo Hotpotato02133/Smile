@@ -7,6 +7,7 @@ Multi-tenant dental practice management and appointment scheduling SaaS built on
 - [`agents.md`](./agents.md) — Master AI agent constitution, zero-cost guardrails, multi-tenant security laws, and sub-agent routing.
 - [`architecture.md`](./architecture.md) — System topology, Clerk + Convex RBAC flow, tenant isolation, and repository map.
 - [`database_schema.md`](./database_schema.md) — Complete 19-table Convex schema (`convex/schema.ts`), compound indexes, and initial seed requirements.
+- [`super_admin_spec.md`](./super_admin_spec.md) — Super Admin command center, multi-clinic provisioning, manual SaaS billing ledger, and pre-aggregated platform analytics.
 - [`clinic_scheduling_spec.md`](./clinic_scheduling_spec.md) — Dual-resource (Dentist + Operatory Chair) slot engine, 5-minute slot locking, front-desk Kanban, and 32-tooth SVG Odontogram.
 - [`implementation_roadmap.md`](./implementation_roadmap.md) — Phased execution roadmap, environment variable setup, and pre-release QA checklist.
 

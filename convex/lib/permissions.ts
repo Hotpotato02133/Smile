@@ -17,6 +17,16 @@ export type ClinicResourceType =
   | "email"
   | "staff";
 
+export type ClinicFeatureFlag = keyof Doc<"clinics">["featureFlags"];
+
+const FEATURE_LABELS: Record<ClinicFeatureFlag, string> = {
+  odontogramEnabled: "Interactive 32-Tooth Odontogram",
+  xrayStorageEnabled: "X-Ray & Intraoral Photo Vault",
+  waitlistAutomationEnabled: "Waitlist Cancellation Blast",
+  recallAutomationEnabled: "6-Month Hygiene Recall Automation",
+  customBrandingEnabled: "Custom Clinic Branding",
+};
+
 type Ctx = QueryCtx | MutationCtx;
 
 /** Resolves the authenticated caller's `users` document (Law #2). */
@@ -177,4 +187,17 @@ export async function assertClinicCanWrite(
   }
 
   return clinic;
+}
+
+/** Gates plan- or tenant-level features stored on `clinics.featureFlags`. */
+export function assertClinicFeatureEnabled(
+  clinic: Doc<"clinics">,
+  feature: ClinicFeatureFlag
+): void {
+  if (!clinic.featureFlags[feature]) {
+    throw new ConvexError({
+      code: "FEATURE_DISABLED",
+      message: `${FEATURE_LABELS[feature]} is not enabled on this clinic's current plan.`,
+    });
+  }
 }

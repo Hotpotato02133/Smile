@@ -19,8 +19,8 @@ When a patient or receptionist selects `(clinicId, serviceId, dateKey, optionalP
    * Query active `chairs` in `clinicId` whose `supportedCategoryTags` includes `service.requiredChairTag` (or all active chairs if `requiredChairTag` is undefined).
 4. **Fetch Existing Commitments in Parallel**:
    * Query `appointments` via `.withIndex("by_clinic_and_date", q => q.eq("clinicId", clinicId).eq("dateKey", dateKey))` where `status` is not `"cancelled"`.
-   * Query active `slotLocks` for that clinic where `expiresAtUtc > Date.now()`.
-   * Query `dentistTimeOff` overlapping that date.
+   * Query active `slotLocks` via `.withIndex("by_clinic_and_expires", q => q.eq("clinicId", clinicId).gt("expiresAtUtc", Date.now()))`.
+   * Query `dentistTimeOff` via `.withIndex("by_clinic_and_time", q => q.eq("clinicId", clinicId))` overlapping that date.
 5. **Step Through Candidate Intervals**:
    * Iterate `candidateMinute` from `clinicOpenMinute` to `clinicCloseMinute - durationMinutes` in increments of `clinic.slotIntervalMinutes` (e.g., every 15 or 30 minutes).
    * Convert `[candidateMinute, candidateMinute + totalBlockMinutes]` to UTC epoch milliseconds `[slotStartUtc, slotBufferEndUtc]`.

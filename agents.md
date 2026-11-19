@@ -41,7 +41,7 @@ All agents must build exclusively with the approved zero-cost stack and respect 
 
 Every AI agent writing backend functions or frontend routes must enforce these seven laws without exception:
 
-1. **Enforce Mandatory `clinicId` Isolation**: Every operational table (`dentists`, `chairs`, `services`, `appointments`, `patients`, `toothRecords`, `waitlist`, `clinicMetricsDaily`) must include `clinicId: v.id("clinics")` as the leading field of its primary compound index ([Multi-Tenant Architecture Guide](https://frontegg.com/guides/multi-tenant-architecture)).
+1. **Enforce Mandatory `clinicId` Isolation**: Every operational table (`dentists`, `dentistTimeOff`, `chairs`, `services`, `appointments`, `slotLocks`, `patients`, `toothRecords`, `clinicalFiles`, `waitlist`, `clinicMetricsDaily`) must include `clinicId: v.id("clinics")` as the leading field of its primary compound index ([Multi-Tenant Architecture Guide](https://frontegg.com/guides/multi-tenant-architecture)).
 2. **Verify Identity Inside Every Convex Query and Mutation**: Never trust client-supplied `userId`, `role`, or `clinicId` arguments alone. Always call `await ctx.auth.getUserIdentity()` ([Convex Auth Overview](https://docs.convex.dev/auth/overview)) and resolve the caller's `users` document in Convex before reading or mutating data.
 3. **Restrict Super Admin Privilege to the Platform Owner**: Only a user whose Convex `users.role === "super_admin"` AND whose email/Clerk subject matches `process.env.SUPER_ADMIN_EMAIL` may execute functions in `convex/superAdmin.ts` or visit `/super-admin/*`.
 4. **Enforce Subscription Status Gates**: Before creating any new appointment or adding staff/chairs for a clinic, verify `clinic.status`:
@@ -56,14 +56,14 @@ Every AI agent writing backend functions or frontend routes must enforce these s
 
 When splitting implementation work across multiple specialized AI coding agents or sessions, assign clear boundaries so agents never overwrite each other's files:
 
-* **Agent 1 — Auth, Schema & Middleware Agent**:
-  * **Owns**: `convex/schema.ts`, `convex/auth.config.ts`, `convex/users.ts`, `convex/lib/permissions.ts`, `convex/http.ts` (Clerk webhooks), and `src/middleware.ts`.
+* **Agent 1 — Auth, Schema & Proxy Agent**:
+  * **Owns**: `convex/schema.ts`, `convex/auth.config.ts`, `convex/users.ts`, `convex/lib/permissions.ts`, `convex/http.ts` (Clerk webhooks), and `src/proxy.ts`.
   * **Reads**: `AGENTS.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`.
 * **Agent 2 — Super Admin & SaaS Billing Agent**:
   * **Owns**: `convex/superAdmin.ts`, `convex/subscriptions.ts`, `convex/platformAnalytics.ts`, and `src/app/(dashboard)/super-admin/**`.
   * **Reads**: `AGENTS.md`, `DATABASE_SCHEMA.md`, `SUPER_ADMIN_SPEC.md`.
 * **Agent 3 — Smart Scheduling Engine & Public Booking Agent**:
-  * **Owns**: `convex/availability.ts`, `convex/appointments.ts`, `convex/slotLocks.ts`, `convex/publicBooking.ts`, and `src/app/c/[clinicSlug]/**`.
+  * **Owns**: `convex/availability.ts`, `convex/appointments.ts`, `convex/slotLocks.ts`, `convex/publicBooking.ts`, and `src/app/(public)/c/[clinicSlug]/**`.
   * **Reads**: `AGENTS.md`, `DATABASE_SCHEMA.md`, `CLINIC_SCHEDULING_SPEC.md`.
 * **Agent 4 — Clinic Operations, Calendar & Odontogram Agent**:
   * **Owns**: `convex/clinicAdmin.ts`, `convex/odontogram.ts`, `convex/files.ts`, `src/app/(dashboard)/admin/**`, `src/app/(dashboard)/front-desk/**`, `src/app/(dashboard)/staff/**`, and `src/components/clinical/**`.

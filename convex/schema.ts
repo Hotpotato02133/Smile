@@ -267,7 +267,9 @@ export default defineSchema({
     endTimeUtc: v.number(),
     reason: v.string(),
     createdByUserId: v.id("users"),
-  }).index("by_dentist_and_time", ["dentistId", "startTimeUtc"]),
+  })
+    .index("by_clinic_and_time", ["clinicId", "startTimeUtc"])
+    .index("by_dentist_and_time", ["dentistId", "startTimeUtc"]),
 
   chairs: defineTable({
     clinicId: v.id("clinics"),
@@ -393,6 +395,7 @@ export default defineSchema({
     lockedBySessionId: v.string(),
     expiresAtUtc: v.number(), // Current time + 5 minutes (300,000 ms)
   })
+    .index("by_clinic_and_expires", ["clinicId", "expiresAtUtc"])
     .index("by_dentist_and_start", ["dentistId", "startTimeUtc"])
     .index("by_chair_and_start", ["chairId", "startTimeUtc"])
     .index("by_expires", ["expiresAtUtc"]),
@@ -431,7 +434,9 @@ export default defineSchema({
     appointmentId: v.optional(v.id("appointments")),
     recordedByDentistId: v.id("dentists"),
     updatedAt: v.number(),
-  }).index("by_patient_and_tooth", ["patientId", "toothNumber"]),
+  })
+    .index("by_clinic_and_patient_tooth", ["clinicId", "patientId", "toothNumber"])
+    .index("by_patient_and_tooth", ["patientId", "toothNumber"]),
 
   clinicalFiles: defineTable({
     clinicId: v.id("clinics"),
@@ -448,7 +453,9 @@ export default defineSchema({
     sizeBytes: v.number(),
     uploadedByUserId: v.id("users"),
     createdAt: v.number(),
-  }).index("by_patient", ["patientId", "createdAt"]),
+  })
+    .index("by_clinic_and_patient", ["clinicId", "patientId", "createdAt"])
+    .index("by_patient", ["patientId", "createdAt"]),
 
   waitlist: defineTable({
     clinicId: v.id("clinics"),
