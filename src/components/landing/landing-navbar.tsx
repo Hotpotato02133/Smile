@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { Show, SignInButton, UserButton } from "@clerk/nextjs";
+import { Show, UserButton } from "@clerk/nextjs";
 import { ArrowUpRight, Menu } from "lucide-react";
 import { useEnvConfig } from "@/components/providers/app-providers";
 import {
@@ -97,14 +97,12 @@ export function LandingNavbar() {
               }
             >
               <Show when="signed-out">
-                <SignInButton>
-                  <button
-                    type="button"
-                    className="inline-flex items-center rounded-full bg-[#F5F7FA] px-4 py-2 text-[13.5px] font-medium text-slate-700 transition-colors hover:bg-[#EAF1F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7] cursor-pointer"
-                  >
-                    Sign In
-                  </button>
-                </SignInButton>
+                <Link
+                  href="/sign-in"
+                  className="inline-flex items-center rounded-full bg-[#F5F7FA] px-4 py-2 text-[13.5px] font-medium text-slate-700 transition-colors hover:bg-[#EAF1F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
+                >
+                  Sign In
+                </Link>
                 <Link
                   href="/clinics"
                   className="inline-flex items-center gap-1.5 rounded-full bg-[#6C5CE7] px-5 py-2 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#5B4BD6] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
