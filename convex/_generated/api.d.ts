@@ -22,6 +22,7 @@ import type * as lib_scheduling from "../lib/scheduling.js";
 import type * as lib_serviceCatalog from "../lib/serviceCatalog.js";
 import type * as notifications from "../notifications.js";
 import type * as odontogram from "../odontogram.js";
+import type * as patientPortal from "../patientPortal.js";
 import type * as platformAnalytics from "../platformAnalytics.js";
 import type * as publicBooking from "../publicBooking.js";
 import type * as seed from "../seed.js";
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   "lib/serviceCatalog": typeof lib_serviceCatalog;
   notifications: typeof notifications;
   odontogram: typeof odontogram;
+  patientPortal: typeof patientPortal;
   platformAnalytics: typeof platformAnalytics;
   publicBooking: typeof publicBooking;
   seed: typeof seed;
