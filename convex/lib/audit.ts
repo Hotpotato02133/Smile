@@ -23,6 +23,13 @@ export function toManilaDateKey(timestampMs: number): string {
   return `${year}-${month}-${day}`;
 }
 
+/** Generates a cryptographically random 32-byte hex invitation token. */
+export function generateInviteToken(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Law #7: Append an immutable entry to `platformAuditLogs`. */
 export async function recordAuditLog(
   ctx: MutationCtx,

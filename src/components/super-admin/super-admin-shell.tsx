@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   ShieldAlert,
   ShieldCheck,
+  UserPlus,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -81,6 +82,12 @@ const NAV_ITEMS = [
     icon: Building2,
   },
   {
+    href: "/super-admin/users",
+    label: "Users & Invites",
+    shortLabel: "Users",
+    icon: UserPlus,
+  },
+  {
     href: "/super-admin/billing",
     label: "Billing & Invoices",
     shortLabel: "Billing",
@@ -121,10 +128,12 @@ function NavLinks({
   pathname,
   onNavigate,
   billingQueueCount,
+  pendingInvitesCount,
 }: {
   pathname: string;
   onNavigate?: () => void;
   billingQueueCount: number;
+  pendingInvitesCount: number;
 }) {
   return (
     <nav className="flex flex-col gap-1" aria-label="Super Admin navigation">
@@ -132,7 +141,11 @@ function NavLinks({
         const active = isRouteActive(pathname, item);
         const Icon = item.icon;
         const badgeCount =
-          item.href === "/super-admin/billing" ? billingQueueCount : 0;
+          item.href === "/super-admin/billing"
+            ? billingQueueCount
+            : item.href === "/super-admin/users"
+              ? pendingInvitesCount
+              : 0;
 
         return (
           <Link
@@ -173,9 +186,9 @@ function NavLinks({
 }
 
 function ConnectedSidebarFooter({
-  onQueueCount,
+  onQueueCounts,
 }: {
-  onQueueCount?: (count: number) => void;
+  onQueueCounts?: (counts: { billing: number; invites: number }) => void;
 }) {
   const { isAuthenticated } = useConvexAuth();
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
@@ -189,13 +202,14 @@ function ConnectedSidebarFooter({
     isAuthenticated && isSuperAdmin ? {} : "skip"
   );
 
-  const queueCount =
+  const billingCount =
     (overview?.renewalQueue.length ?? 0) +
     (overview?.pendingPaymentsCount ?? 0);
+  const invitesCount = overview?.pendingInvitationsCount ?? 0;
 
   useEffect(() => {
-    onQueueCount?.(queueCount);
-  }, [queueCount, onQueueCount]);
+    onQueueCounts?.({ billing: billingCount, invites: invitesCount });
+  }, [billingCount, invitesCount, onQueueCounts]);
 
   const storagePct = freeTier?.storage.percentUsed ?? 0;
   const emailPct = freeTier?.emails.percentUsed ?? 0;
@@ -426,7 +440,7 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { isConfigured } = useEnvConfig();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [billingQueueCount, setBillingQueueCount] = useState(0);
+  const [queueCounts, setQueueCounts] = useState({ billing: 0, invites: 0 });
   const sidebarOpen = useSyncExternalStore(
     subscribeSidebarState,
     getSidebarSnapshot,
@@ -484,7 +498,8 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
             </p>
             <NavLinks
               pathname={pathname}
-              billingQueueCount={billingQueueCount}
+              billingQueueCount={queueCounts.billing}
+              pendingInvitesCount={queueCounts.invites}
             />
           </div>
 
@@ -514,7 +529,7 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
 
         <div className="w-[228px] pt-4">
           {isConfigured ? (
-            <ConnectedSidebarFooter onQueueCount={setBillingQueueCount} />
+            <ConnectedSidebarFooter onQueueCounts={setQueueCounts} />
           ) : (
             <div className="rounded-2xl border border-slate-200/70 bg-white p-3 text-xs text-slate-500">
               Setup Mode · Connect environment keys
@@ -558,7 +573,8 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
                     <div className="space-y-5 p-4">
                       <NavLinks
                         pathname={pathname}
-                        billingQueueCount={billingQueueCount}
+                        billingQueueCount={queueCounts.billing}
+                        pendingInvitesCount={queueCounts.invites}
                         onNavigate={() => setMobileOpen(false)}
                       />
                       <div className="space-y-1 border-t border-slate-200/70 pt-4">
@@ -650,7 +666,11 @@ export function SuperAdminShell({ children }: { children: ReactNode }) {
             {NAV_ITEMS.map((item) => {
               const active = isRouteActive(pathname, item);
               const badgeCount =
-                item.href === "/super-admin/billing" ? billingQueueCount : 0;
+                item.href === "/super-admin/billing"
+                  ? queueCounts.billing
+                  : item.href === "/super-admin/users"
+                    ? queueCounts.invites
+                    : 0;
               return (
                 <Link
                   key={item.href}

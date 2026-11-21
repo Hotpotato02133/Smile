@@ -51,11 +51,16 @@ export const upsertFromClerk = internalMutation({
           q.eq("email", email).eq("status", "pending")
         )
         .collect();
-      const invitation = invitations.find((i) => i.expiresAt >= now);
+      const invitation = invitations.find(
+        (i) => !i.token && i.expiresAt >= now
+      );
       if (invitation) {
         role = invitation.role;
         clinicId = invitation.clinicId;
-        await ctx.db.patch(invitation._id, { status: "accepted" });
+        await ctx.db.patch(invitation._id, {
+          status: "accepted",
+          respondedAt: now,
+        });
       }
     }
 
@@ -191,11 +196,16 @@ export const ensureCurrentUser = mutation({
           q.eq("email", email).eq("status", "pending")
         )
         .collect();
-      const invitation = invitations.find((i) => i.expiresAt >= now);
+      const invitation = invitations.find(
+        (i) => !i.token && i.expiresAt >= now
+      );
       if (invitation) {
         role = invitation.role;
         clinicId = invitation.clinicId;
-        await ctx.db.patch(invitation._id, { status: "accepted" });
+        await ctx.db.patch(invitation._id, {
+          status: "accepted",
+          respondedAt: now,
+        });
       }
     }
 

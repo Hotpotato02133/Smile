@@ -213,24 +213,41 @@ export default defineSchema({
     .index("by_role", ["role"]),
 
   staffInvitations: defineTable({
-    clinicId: v.id("clinics"),
+    clinicId: v.optional(v.id("clinics")), // Required for clinic_admin, dentist, receptionist; omitted for super_admin
     email: v.string(),
     role: v.union(
+      v.literal("super_admin"),
       v.literal("clinic_admin"),
       v.literal("dentist"),
       v.literal("receptionist")
     ),
+    token: v.optional(v.string()),
+    inviterNote: v.optional(v.string()),
     invitedByUserId: v.id("users"),
     status: v.union(
       v.literal("pending"),
       v.literal("accepted"),
+      v.literal("declined"),
       v.literal("revoked")
     ),
+    declineReason: v.optional(v.string()),
+    emailStatus: v.optional(
+      v.union(
+        v.literal("queued"),
+        v.literal("sent"),
+        v.literal("failed"),
+        v.literal("skipped")
+      )
+    ),
+    emailError: v.optional(v.string()),
+    respondedAt: v.optional(v.number()),
     expiresAt: v.number(),
     createdAt: v.number(),
   })
     .index("by_email_and_status", ["email", "status"])
-    .index("by_clinic", ["clinicId", "status"]),
+    .index("by_clinic", ["clinicId", "status"])
+    .index("by_token", ["token"])
+    .index("by_status_and_created", ["status", "createdAt"]),
 
   // ============================================================================
   // 3. CLINIC RESOURCES (DENTISTS, CHAIRS, SERVICES)

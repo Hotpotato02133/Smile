@@ -11,6 +11,7 @@ import {
   appointmentReminder24hEmail,
   bookingConfirmationEmail,
   hygieneRecallEmail,
+  roleInvitationEmail,
   subscriptionExpiryAlertEmail,
   waitlistOpeningEmail,
 } from "./emails/templates";
@@ -337,5 +338,131 @@ export const sendSubscriptionStatusAlert = internalAction({
       text: template.text,
       skipQuotaCheck: true,
     });
+  },
+});
+
+type InvitationEmailContext = {
+  invitation: Doc<"staffInvitations">;
+  clinic: Doc<"clinics"> | null;
+  inviterName: string;
+} | null;
+
+export const getInvitationEmailContext = internalQuery({
+  args: { invitationId: v.id("staffInvitations") },
+  handler: async (ctx, args): Promise<InvitationEmailContext> => {
+    const invitation = await ctx.db.get(args.invitationId);
+    if (!invitation) return null;
+
+    const [clinic, inviter] = await Promise.all([
+      invitation.clinicId ? ctx.db.get(invitation.clinicId) : Promise.resolve(null),
+      ctx.db.get(invitation.invitedByUserId),
+    ]);
+
+    const inviterName = inviter
+      ? `${inviter.firstName} ${inviter.lastName}`.trim() || inviter.email
+      : "Smile Administrator";
+
+    return { invitation, clinic, inviterName };
+  },
+});
+
+export const markInvitationEmailStatus = internalMutation({
+  args: {
+    invitationId: v.id("staffInvitations"),
+    emailStatus: v.union(
+      v.literal("queued"),
+      v.literal("sent"),
+      v.literal("failed"),
+      v.literal("skipped")
+    ),
+    emailError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.invitationId);
+    if (!existing) return;
+    await ctx.db.patch(args.invitationId, {
+      emailStatus: args.emailStatus,
+      emailError: args.emailError,
+    });
+  },
+});
+
+/** Dispatches a branded role invitation email (supports Super Admin, Clinic Admin, Dentist, Receptionist). */
+export const sendRoleInvitationEmail = internalAction({
+  args: {
+    invitationId: v.id("staffInvitations"),
+  },
+  handler: async (ctx, args): Promise<EmailDispatchResult> => {
+    const context: InvitationEmailContext = await ctx.runQuery(
+      internal.notifications.getInvitationEmailContext,
+      { invitationId: args.invitationId }
+    );
+    if (!context || !context.invitation.token) {
+      return { sent: false, reason: "INVITATION_NOT_FOUND" };
+    }
+
+    const { invitation, clinic, inviterName } = context;
+    const baseUrl = getAppBaseUrl();
+    const acceptUrl = `${baseUrl}/invite/${invitation.token}`;
+    const declineUrl = `${baseUrl}/invite/${invitation.token}?action=decline`;
+
+    const template = roleInvitationEmail({
+      recipientEmail: invitation.email,
+      role: invitation.role,
+      scopeName: clinic?.name ?? "Smile Dental SaaS Platform",
+      accentHex: clinic?.primaryColorHex ?? "#6C5CE7",
+      inviterName,
+      inviterNote: invitation.inviterNote,
+      expiresFormatted: formatManilaDateTime(invitation.expiresAt),
+      acceptUrl,
+      declineUrl,
+    });
+
+    const apiKey = process.env.RESEND_API_KEY?.trim();
+    if (!apiKey) {
+      await ctx.runMutation(internal.notifications.markInvitationEmailStatus, {
+        invitationId: args.invitationId,
+        emailStatus: "skipped",
+        emailError: "RESEND_API_KEY not configured — share invite link manually.",
+      });
+      return { sent: false, reason: "RESEND_NOT_CONFIGURED" };
+    }
+
+    let dispatchResult: EmailDispatchResult;
+    if (clinic) {
+      dispatchResult = await ctx.runAction(internal.notifications.sendClinicEmail, {
+        clinicId: clinic._id,
+        to: invitation.email,
+        subject: template.subject,
+        html: template.html,
+        text: template.text,
+        skipQuotaCheck: true,
+      });
+    } else {
+      const resend = new Resend(apiKey);
+      const from =
+        process.env.RESEND_FROM_EMAIL?.trim() ||
+        "Smile Dental <onboarding@resend.dev>";
+      const res = await resend.emails.send({
+        from,
+        to: invitation.email,
+        subject: template.subject,
+        html: template.html,
+        text: template.text,
+      });
+      dispatchResult = res.error
+        ? { sent: false, reason: res.error.message }
+        : { sent: true, id: res.data?.id ?? null };
+    }
+
+    await ctx.runMutation(internal.notifications.markInvitationEmailStatus, {
+      invitationId: args.invitationId,
+      emailStatus: dispatchResult.sent ? "sent" : "failed",
+      emailError: dispatchResult.sent
+        ? undefined
+        : dispatchResult.reason ?? "Email dispatch failed.",
+    });
+
+    return dispatchResult;
   },
 });

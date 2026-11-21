@@ -49,18 +49,36 @@ export async function getAuthenticatedUser(ctx: Ctx): Promise<Doc<"users">> {
   return user;
 }
 
-/** Law #3: role AND email must match the platform owner. */
+/** Returns true if the user is the root owner configured in SUPER_ADMIN_EMAIL. */
+export function isRootSuperAdmin(user: Doc<"users">): boolean {
+  const ownerEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+  return Boolean(
+    user.role === "super_admin" &&
+      ownerEmail &&
+      user.email.trim().toLowerCase() === ownerEmail
+  );
+}
+
+/** Law #3: requires active super_admin (root owner or audited invited co-owner). */
 export async function requireSuperAdmin(ctx: Ctx): Promise<Doc<"users">> {
   const user = await getAuthenticatedUser(ctx);
-  const ownerEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
-  if (
-    user.role !== "super_admin" ||
-    !ownerEmail ||
-    user.email.trim().toLowerCase() !== ownerEmail
-  ) {
+  if (user.role !== "super_admin") {
     throw new ConvexError({
       code: "FORBIDDEN",
       message: "Super Admin privileges required.",
+    });
+  }
+  return user;
+}
+
+/** Root Platform Owner guard for granting or revoking Super Admin privileges. */
+export async function requireRootSuperAdmin(ctx: Ctx): Promise<Doc<"users">> {
+  const user = await requireSuperAdmin(ctx);
+  if (!isRootSuperAdmin(user)) {
+    throw new ConvexError({
+      code: "FORBIDDEN",
+      message:
+        "Only the primary Platform Owner (SUPER_ADMIN_EMAIL) may invite or revoke Super Admin accounts.",
     });
   }
   return user;

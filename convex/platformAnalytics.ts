@@ -46,6 +46,7 @@ export const getDashboardOverview = query({
       recentMetrics,
       pendingPayments,
       activeAnnouncements,
+      pendingInvitations,
     ] = await Promise.all([
       ctx.db.query("clinics").take(500),
       ctx.db.query("subscriptionPlans").take(50),
@@ -76,6 +77,10 @@ export const getDashboardOverview = query({
         .query("systemAnnouncements")
         .withIndex("by_active", (q) => q.eq("isActive", true))
         .take(50),
+      ctx.db
+        .query("staffInvitations")
+        .withIndex("by_status_and_created", (q) => q.eq("status", "pending"))
+        .take(100),
     ]);
 
     const planMap = new Map<Id<"subscriptionPlans">, Doc<"subscriptionPlans">>(
@@ -160,6 +165,9 @@ export const getDashboardOverview = query({
     const activeAnnouncementsCount = activeAnnouncements.filter(
       (a) => !a.expiresAt || a.expiresAt >= now
     ).length;
+    const pendingInvitationsCount = pendingInvitations.filter(
+      (i) => i.expiresAt >= now
+    ).length;
 
     // Deduplicate renewal queue (expiring within 7 days OR currently past_due, excluding archived)
     const renewalMap = new Map<Id<"clinics">, Doc<"clinics">>();
@@ -200,6 +208,7 @@ export const getDashboardOverview = query({
       collectedThisMonthPhp,
       paidInvoicesThisMonthCount: paidInvoicesThisMonth.length,
       pendingPaymentsCount: pendingPayments.length,
+      pendingInvitationsCount,
       activeAnnouncementsCount,
       currentMonthAppointments,
       lifetimeAppointments,

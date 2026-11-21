@@ -16,6 +16,7 @@ import type * as crons from "../crons.js";
 import type * as emails_templates from "../emails/templates.js";
 import type * as files from "../files.js";
 import type * as http from "../http.js";
+import type * as invitations from "../invitations.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_permissions from "../lib/permissions.js";
 import type * as lib_scheduling from "../lib/scheduling.js";
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   "emails/templates": typeof emails_templates;
   files: typeof files;
   http: typeof http;
+  invitations: typeof invitations;
   "lib/audit": typeof lib_audit;
   "lib/permissions": typeof lib_permissions;
   "lib/scheduling": typeof lib_scheduling;

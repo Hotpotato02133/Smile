@@ -240,6 +240,14 @@ export function OverviewDashboard() {
           <Button
             variant="outline"
             size="sm"
+            render={<Link href="/super-admin/users" />}
+            className="h-9 rounded-full border-slate-200 px-4 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            Invite User
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             render={<Link href="/super-admin/billing" />}
             className="h-9 rounded-full border-slate-200 px-4 text-xs font-semibold text-slate-800 hover:bg-slate-50"
           >

@@ -204,3 +204,86 @@ export function subscriptionExpiryAlertEmail(params: {
       : `${params.clinicName} subscription ended on ${params.subscriptionEndsAtFormatted} and entered its 3-day grace period. Please renew to avoid interruption.`,
   };
 }
+
+const INVITE_ROLE_LABELS: Record<
+  "super_admin" | "clinic_admin" | "dentist" | "receptionist",
+  { label: string; summary: string }
+> = {
+  super_admin: {
+    label: "Super Admin",
+    summary:
+      "Full SaaS platform oversight, clinic provisioning, billing ledger, and audit controls.",
+  },
+  clinic_admin: {
+    label: "Clinic Admin",
+    summary:
+      "Manage clinic dentists, operatory chairs, dental services, branding, staff, and reports.",
+  },
+  dentist: {
+    label: "Dentist",
+    summary:
+      "View your daily chair queue, chart the 32-tooth interactive Odontogram, and manage X-rays.",
+  },
+  receptionist: {
+    label: "Receptionist",
+    summary:
+      "Operate the front-desk calendar, live patient check-in board, walk-ins, and waitlist.",
+  },
+};
+
+export function roleInvitationEmail(params: {
+  recipientEmail: string;
+  role: "super_admin" | "clinic_admin" | "dentist" | "receptionist";
+  scopeName: string;
+  accentHex: string;
+  inviterName: string;
+  inviterNote?: string;
+  expiresFormatted: string;
+  acceptUrl: string;
+  declineUrl: string;
+}): EmailTemplateOutput {
+  const roleMeta = INVITE_ROLE_LABELS[params.role];
+  const isPlatform = params.role === "super_admin";
+  const subject = isPlatform
+    ? `You're invited to join Smile Dental as a ${roleMeta.label}`
+    : `You're invited to join ${params.scopeName} on Smile as a ${roleMeta.label}`;
+
+  const noteBlock = params.inviterNote
+    ? `<div style="margin:16px 0;padding:12px 14px;background:#f8fafc;border-left:3px solid ${escapeHtml(params.accentHex)};border-radius:6px;font-size:13px;color:#334155;">
+         <strong style="display:block;margin-bottom:4px;color:#0f172a;">Note from ${escapeHtml(params.inviterName)}:</strong>
+         ${escapeHtml(params.inviterNote)}
+       </div>`
+    : "";
+
+  const bodyHtml = `
+    <p>Hello,</p>
+    <p><strong>${escapeHtml(params.inviterName)}</strong> has invited you to join <strong>${escapeHtml(params.scopeName)}</strong> on the <strong>Smile Dental Scheduling System</strong> as a <strong>${escapeHtml(roleMeta.label)}</strong>.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border-radius:8px;">
+      <tr><td style="padding:8px 12px;color:#64748b;width:120px;">Assigned Role</td><td style="padding:8px 12px;font-weight:600;color:#0f172a;">${escapeHtml(roleMeta.label)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Workspace</td><td style="padding:8px 12px;font-weight:600;color:#0f172a;">${escapeHtml(params.scopeName)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Invited Email</td><td style="padding:8px 12px;font-family:monospace;font-size:12px;color:#334155;">${escapeHtml(params.recipientEmail)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Expires</td><td style="padding:8px 12px;color:#334155;">${escapeHtml(params.expiresFormatted)}</td></tr>
+    </table>
+    <p style="font-size:13px;color:#475569;">${escapeHtml(roleMeta.summary)}</p>
+    ${noteBlock}
+    <div style="margin:24px 0 16px;">
+      <a href="${escapeHtml(params.acceptUrl)}" style="display:inline-block;padding:12px 22px;background:${escapeHtml(params.accentHex)};color:#ffffff;text-decoration:none;border-radius:9999px;font-weight:600;font-size:14px;">Review &amp; Accept Invitation</a>
+    </div>
+    <p style="margin:0 0 16px;font-size:13px;">
+      Not expecting this invite? <a href="${escapeHtml(params.declineUrl)}" style="color:#64748b;text-decoration:underline;">Decline this invitation</a>.
+    </p>
+    <p style="font-size:12px;color:#64748b;">For security, only an account signed in with <strong>${escapeHtml(params.recipientEmail)}</strong> can accept this role assignment.</p>
+  `;
+
+  return {
+    subject,
+    html: wrapLayout(
+      params.accentHex,
+      isPlatform ? "Smile Dental SaaS Platform" : params.scopeName,
+      `You're Invited as a ${roleMeta.label}`,
+      bodyHtml,
+      `If the button above does not work, copy and open this link: ${params.acceptUrl}`
+    ),
+    text: `Hello,\n\n${params.inviterName} has invited you to join ${params.scopeName} on Smile Dental as a ${roleMeta.label}.\n\nAssigned Role: ${roleMeta.label}\nWorkspace: ${params.scopeName}\nInvited Email: ${params.recipientEmail}\nExpires: ${params.expiresFormatted}\n${params.inviterNote ? `\nNote: ${params.inviterNote}\n` : ""}\nAccept invitation: ${params.acceptUrl}\nDecline invitation: ${params.declineUrl}\n\nSign in or sign up with ${params.recipientEmail} to activate your role.`,
+  };
+}

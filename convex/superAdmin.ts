@@ -5,12 +5,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import {
   DAY_MS,
+  generateInviteToken,
   GRACE_PERIOD_MS,
   recordAuditLog,
   toManilaDateKey,
   toManilaMonthKey,
 } from "./lib/audit";
-import { requireSuperAdmin } from "./lib/permissions";
+import { isRootSuperAdmin, requireSuperAdmin } from "./lib/permissions";
 import { DEFAULT_SERVICE_CATALOG } from "./lib/serviceCatalog";
 
 const clinicStatusValidator = v.union(
@@ -273,15 +274,23 @@ export const createClinic = mutation({
 
     const inviteEmail = args.ownerEmail?.trim().toLowerCase() || email;
     if (inviteEmail) {
-      await ctx.db.insert("staffInvitations", {
+      const inviteToken = generateInviteToken();
+      const invitationId = await ctx.db.insert("staffInvitations", {
         clinicId,
         email: inviteEmail,
         role: "clinic_admin",
+        token: inviteToken,
         invitedByUserId: actor._id,
         status: "pending",
+        emailStatus: "queued",
         expiresAt: now + 7 * DAY_MS,
         createdAt: now,
       });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendRoleInvitationEmail,
+        { invitationId }
+      );
     }
 
     await recordAuditLog(ctx, {
@@ -482,15 +491,24 @@ export const inviteClinicAdmin = mutation({
       }
     }
 
+    const token = generateInviteToken();
     const invitationId = await ctx.db.insert("staffInvitations", {
       clinicId: args.clinicId,
       email,
       role: "clinic_admin",
+      token,
       invitedByUserId: actor._id,
       status: "pending",
+      emailStatus: "queued",
       expiresAt: now + 7 * DAY_MS,
       createdAt: now,
     });
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendRoleInvitationEmail,
+      { invitationId }
+    );
 
     await recordAuditLog(ctx, {
       actorUserId: actor._id,
@@ -502,7 +520,7 @@ export const inviteClinicAdmin = mutation({
       metadata: { clinicName: clinic.name, email },
     });
 
-    return { invitationId };
+    return { invitationId, token };
   },
 });
 
@@ -1088,5 +1106,423 @@ export const listAuditLogs = query({
         clinicName: clinic?.name ?? null,
       };
     });
+  },
+});
+
+const assignableRoleValidator = v.union(
+  v.literal("super_admin"),
+  v.literal("clinic_admin"),
+  v.literal("dentist"),
+  v.literal("receptionist")
+);
+
+const allRoleValidator = v.union(
+  v.literal("super_admin"),
+  v.literal("clinic_admin"),
+  v.literal("dentist"),
+  v.literal("receptionist"),
+  v.literal("patient")
+);
+
+export const listAllUsers = query({
+  args: {
+    role: v.optional(allRoleValidator),
+    search: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const rows = args.role
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_role", (q) => q.eq("role", args.role!))
+          .order("desc")
+          .take(250)
+      : await ctx.db.query("users").order("desc").take(250);
+
+    const term = args.search?.trim().toLowerCase();
+    const filtered: Doc<"users">[] = [];
+    for (const u of rows) {
+      if (
+        term &&
+        !u.email.toLowerCase().includes(term) &&
+        !`${u.firstName} ${u.lastName}`.toLowerCase().includes(term)
+      ) {
+        continue;
+      }
+      filtered.push(u);
+    }
+
+    const clinicIds = Array.from(
+      new Set(
+        filtered
+          .map((u) => u.clinicId)
+          .filter((id): id is Id<"clinics"> => id !== undefined)
+      )
+    );
+    const clinics = await Promise.all(clinicIds.map((id) => ctx.db.get(id)));
+    const clinicMap = new Map(
+      clinics
+        .filter((c): c is Doc<"clinics"> => c !== null)
+        .map((c) => [c._id, c])
+    );
+
+    const rootOwnerEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+
+    return {
+      callerIsRootOwner: isRootSuperAdmin(actor),
+      callerUserId: actor._id,
+      users: filtered.map((u) => {
+        const clinic = u.clinicId ? clinicMap.get(u.clinicId) : null;
+        return {
+          _id: u._id,
+          email: u.email,
+          firstName: u.firstName,
+          lastName: u.lastName,
+          role: u.role,
+          clinicId: u.clinicId ?? null,
+          clinicName: clinic?.name ?? null,
+          clinicSlug: clinic?.slug ?? null,
+          isActive: u.isActive,
+          isRootOwner: Boolean(
+            rootOwnerEmail && u.email.trim().toLowerCase() === rootOwnerEmail
+          ),
+          lastLoginAt: u.lastLoginAt ?? null,
+          createdAt: u.createdAt,
+        };
+      }),
+    };
+  },
+});
+
+export const listAllInvitations = query({
+  args: {
+    status: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("accepted"),
+        v.literal("declined"),
+        v.literal("revoked")
+      )
+    ),
+    role: v.optional(assignableRoleValidator),
+    search: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+
+    const rows = args.status
+      ? await ctx.db
+          .query("staffInvitations")
+          .withIndex("by_status_and_created", (q) => q.eq("status", args.status!))
+          .order("desc")
+          .take(200)
+      : await ctx.db.query("staffInvitations").order("desc").take(200);
+
+    const term = args.search?.trim().toLowerCase();
+    const filtered: Doc<"staffInvitations">[] = [];
+    for (const inv of rows) {
+      if (args.role && inv.role !== args.role) continue;
+      if (term && !inv.email.toLowerCase().includes(term)) continue;
+      filtered.push(inv);
+    }
+
+    const clinicIds = Array.from(
+      new Set(
+        filtered
+          .map((i) => i.clinicId)
+          .filter((id): id is Id<"clinics"> => id !== undefined)
+      )
+    );
+    const inviterIds = Array.from(new Set(filtered.map((i) => i.invitedByUserId)));
+
+    const [clinics, inviters] = await Promise.all([
+      Promise.all(clinicIds.map((id) => ctx.db.get(id))),
+      Promise.all(inviterIds.map((id) => ctx.db.get(id))),
+    ]);
+
+    const clinicMap = new Map(
+      clinics
+        .filter((c): c is Doc<"clinics"> => c !== null)
+        .map((c) => [c._id, c])
+    );
+    const inviterMap = new Map(
+      inviters
+        .filter((u): u is Doc<"users"> => u !== null)
+        .map((u) => [u._id, u])
+    );
+
+    return filtered.map((inv) => {
+      const clinic = inv.clinicId ? clinicMap.get(inv.clinicId) : null;
+      const inviter = inviterMap.get(inv.invitedByUserId);
+      return {
+        _id: inv._id,
+        email: inv.email,
+        role: inv.role,
+        token: inv.token ?? null,
+        inviterNote: inv.inviterNote ?? null,
+        status: inv.status,
+        declineReason: inv.declineReason ?? null,
+        emailStatus: inv.emailStatus ?? "skipped",
+        emailError: inv.emailError ?? null,
+        clinicId: inv.clinicId ?? null,
+        clinicName: clinic?.name ?? null,
+        clinicColorHex: clinic?.primaryColorHex ?? "#6C5CE7",
+        inviterName: inviter
+          ? `${inviter.firstName} ${inviter.lastName}`.trim() || inviter.email
+          : "Smile Admin",
+        expiresAt: inv.expiresAt,
+        respondedAt: inv.respondedAt ?? null,
+        createdAt: inv.createdAt,
+      };
+    });
+  },
+});
+
+export const createRoleInvitation = mutation({
+  args: {
+    email: v.string(),
+    role: assignableRoleValidator,
+    clinicId: v.optional(v.id("clinics")),
+    inviterNote: v.optional(v.string()),
+    expiresInDays: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const email = args.email.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Enter a valid email address.",
+      });
+    }
+
+    if (args.role === "super_admin" && !isRootSuperAdmin(actor)) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message:
+          "Only the primary Platform Owner may send Super Admin invitations.",
+      });
+    }
+
+    let clinic: Doc<"clinics"> | null = null;
+    if (args.role !== "super_admin") {
+      if (!args.clinicId) {
+        throw new ConvexError({
+          code: "INVALID_INPUT",
+          message: "Select a dental clinic for this staff role.",
+        });
+      }
+      clinic = await ctx.db.get(args.clinicId);
+      if (!clinic) {
+        throw new ConvexError({
+          code: "NOT_FOUND",
+          message: "Selected dental clinic was not found.",
+        });
+      }
+    }
+
+    const now = Date.now();
+    const expiresDays = Math.min(Math.max(Math.round(args.expiresInDays ?? 7), 1), 30);
+
+    // Revoke any older pending invitations for the same email to keep one active invite link
+    const existingPending = await ctx.db
+      .query("staffInvitations")
+      .withIndex("by_email_and_status", (q) =>
+        q.eq("email", email).eq("status", "pending")
+      )
+      .take(20);
+    for (const old of existingPending) {
+      await ctx.db.patch(old._id, { status: "revoked" });
+    }
+
+    const token = generateInviteToken();
+    const invitationId = await ctx.db.insert("staffInvitations", {
+      clinicId: clinic?._id,
+      email,
+      role: args.role,
+      token,
+      inviterNote: args.inviterNote?.trim() || undefined,
+      invitedByUserId: actor._id,
+      status: "pending",
+      emailStatus: "queued",
+      expiresAt: now + expiresDays * DAY_MS,
+      createdAt: now,
+    });
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendRoleInvitationEmail,
+      { invitationId }
+    );
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: clinic?._id,
+      actionType: "ROLE_INVITATION_SENT",
+      targetEntity: "staffInvitations",
+      targetId: invitationId,
+      metadata: {
+        email,
+        role: args.role,
+        clinicName: clinic?.name ?? "Platform-wide",
+        expiresInDays: expiresDays,
+      },
+    });
+
+    return { invitationId, token };
+  },
+});
+
+export const resendInvitation = mutation({
+  args: {
+    invitationId: v.id("staffInvitations"),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const invitation = await ctx.db.get(args.invitationId);
+    if (!invitation) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Invitation not found.",
+      });
+    }
+
+    if (invitation.role === "super_admin" && !isRootSuperAdmin(actor)) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "Only the primary Platform Owner may resend Super Admin invitations.",
+      });
+    }
+
+    if (invitation.status === "accepted") {
+      throw new ConvexError({
+        code: "INVALID_STATE",
+        message: "This invitation has already been accepted.",
+      });
+    }
+
+    const now = Date.now();
+    const token = invitation.token ?? generateInviteToken();
+
+    await ctx.db.patch(args.invitationId, {
+      token,
+      status: "pending",
+      declineReason: undefined,
+      respondedAt: undefined,
+      emailStatus: "queued",
+      emailError: undefined,
+      expiresAt: now + 7 * DAY_MS,
+    });
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendRoleInvitationEmail,
+      { invitationId: args.invitationId }
+    );
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: invitation.clinicId,
+      actionType: "ROLE_INVITATION_RESENT",
+      targetEntity: "staffInvitations",
+      targetId: args.invitationId,
+      metadata: { email: invitation.email, role: invitation.role },
+    });
+
+    return { invitationId: args.invitationId, token };
+  },
+});
+
+export const updateUserRoleOrStatus = mutation({
+  args: {
+    userId: v.id("users"),
+    role: v.optional(allRoleValidator),
+    clinicId: v.optional(v.union(v.id("clinics"), v.null())),
+    isActive: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const target = await ctx.db.get(args.userId);
+    if (!target) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "User not found." });
+    }
+
+    const rootEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+    const targetIsRoot = Boolean(
+      rootEmail && target.email.trim().toLowerCase() === rootEmail
+    );
+
+    if (targetIsRoot && (args.isActive === false || (args.role && args.role !== "super_admin"))) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "The primary Platform Owner account cannot be demoted or deactivated.",
+      });
+    }
+
+    const nextRole = args.role ?? target.role;
+    const touchesSuperAdmin =
+      target.role === "super_admin" || nextRole === "super_admin";
+    if (touchesSuperAdmin && !isRootSuperAdmin(actor)) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message:
+          "Only the primary Platform Owner may grant, modify, or revoke Super Admin privileges.",
+      });
+    }
+
+    let nextClinicId: Id<"clinics"> | undefined =
+      args.clinicId === undefined
+        ? target.clinicId
+        : args.clinicId === null
+          ? undefined
+          : args.clinicId;
+
+    if (nextRole === "super_admin" || nextRole === "patient") {
+      nextClinicId = undefined;
+    } else if (!nextClinicId) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Staff roles require an assigned dental clinic.",
+      });
+    }
+
+    const nextActive = args.isActive ?? target.isActive;
+
+    await ctx.db.patch(args.userId, {
+      role: nextRole,
+      clinicId: nextClinicId,
+      isActive: nextActive,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.invitations.syncClerkRoleMetadata, {
+      clerkId: target.clerkId,
+      role: nextRole,
+      clinicId: nextClinicId ?? null,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: nextClinicId,
+      actionType: "USER_ROLE_UPDATED",
+      targetEntity: "users",
+      targetId: args.userId,
+      metadata: {
+        email: target.email,
+        previousRole: target.role,
+        newRole: nextRole,
+        previousActive: target.isActive,
+        newActive: nextActive,
+        clinicId: nextClinicId ?? null,
+      },
+    });
+
+    return { userId: args.userId, role: nextRole, isActive: nextActive };
   },
 });

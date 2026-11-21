@@ -1,7 +1,13 @@
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type MutationCtx, mutation, query } from "./_generated/server";
-import { DAY_MS, recordAuditLog, toManilaDateKey } from "./lib/audit";
+import {
+  DAY_MS,
+  generateInviteToken,
+  recordAuditLog,
+  toManilaDateKey,
+} from "./lib/audit";
 import {
   assertClinicCanWrite,
   assertClinicFeatureEnabled,
@@ -1056,15 +1062,24 @@ export const inviteStaff = mutation({
       }
     }
 
+    const token = generateInviteToken();
     const invitationId = await ctx.db.insert("staffInvitations", {
       clinicId,
       email,
       role: args.role,
+      token,
       invitedByUserId: actor._id,
       status: "pending",
+      emailStatus: "queued",
       expiresAt: now + 7 * DAY_MS,
       createdAt: now,
     });
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendRoleInvitationEmail,
+      { invitationId }
+    );
 
     await recordAuditLog(ctx, {
       actorUserId: actor._id,
