@@ -281,6 +281,11 @@ export const recordPayment = mutation({
       createdAt: now,
     });
 
+    const receiptMeta = args.receiptStorageId
+      ? await ctx.db.system.get("_storage", args.receiptStorageId)
+      : null;
+    const receiptBytes = receiptMeta?.size ?? 0;
+
     if (args.status === "paid") {
       await ctx.db.patch(args.clinicId, {
         planId: args.planId,
@@ -290,6 +295,12 @@ export const recordPayment = mutation({
         subscriptionEndsAt: Math.max(clinic.subscriptionEndsAt, args.periodEnd),
         gracePeriodEndsAt: undefined,
         featureFlags: { ...plan.defaultFeatures },
+        storageUsedBytes: clinic.storageUsedBytes + receiptBytes,
+        updatedAt: now,
+      });
+    } else if (receiptBytes > 0) {
+      await ctx.db.patch(args.clinicId, {
+        storageUsedBytes: clinic.storageUsedBytes + receiptBytes,
         updatedAt: now,
       });
     }

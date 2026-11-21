@@ -1,10 +1,13 @@
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import {
   DAY_MS,
   GRACE_PERIOD_MS,
   recordAuditLog,
+  toManilaDateKey,
   toManilaMonthKey,
 } from "./lib/audit";
 import { requireSuperAdmin } from "./lib/permissions";
@@ -503,6 +506,171 @@ export const inviteClinicAdmin = mutation({
   },
 });
 
+export const revokeInvitation = mutation({
+  args: {
+    invitationId: v.id("staffInvitations"),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const invitation = await ctx.db.get(args.invitationId);
+    if (!invitation) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Invitation not found.",
+      });
+    }
+
+    await ctx.db.patch(args.invitationId, { status: "revoked" });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: invitation.clinicId,
+      actionType: "CLINIC_ADMIN_INVITE_REVOKED",
+      targetEntity: "staffInvitations",
+      targetId: args.invitationId,
+      metadata: { email: invitation.email, role: invitation.role },
+    });
+
+    return { invitationId: args.invitationId };
+  },
+});
+
+export const updateClinicDetails = mutation({
+  args: {
+    clinicId: v.id("clinics"),
+    name: v.string(),
+    tagline: v.optional(v.string()),
+    primaryColorHex: v.string(),
+    email: v.string(),
+    phone: v.string(),
+    address: v.string(),
+    city: v.string(),
+    province: v.string(),
+    timezone: v.optional(v.string()),
+    slotIntervalMinutes: v.optional(v.number()),
+    cancellationWindowHours: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const clinic = await ctx.db.get(args.clinicId);
+    if (!clinic) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Clinic not found." });
+    }
+
+    const name = args.name.trim();
+    const email = args.email.trim().toLowerCase();
+    const primaryColorHex = HEX_COLOR_REGEX.test(args.primaryColorHex.trim())
+      ? args.primaryColorHex.trim()
+      : clinic.primaryColorHex;
+
+    if (name.length < 2) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Clinic name must be at least 2 characters.",
+      });
+    }
+
+    await ctx.db.patch(args.clinicId, {
+      name,
+      tagline: args.tagline?.trim() || undefined,
+      primaryColorHex,
+      email,
+      phone: args.phone.trim(),
+      address: args.address.trim(),
+      city: args.city.trim(),
+      province: args.province.trim(),
+      timezone: args.timezone?.trim() || clinic.timezone,
+      slotIntervalMinutes:
+        args.slotIntervalMinutes === 15
+          ? 15
+          : args.slotIntervalMinutes === 30
+            ? 30
+            : clinic.slotIntervalMinutes,
+      cancellationWindowHours:
+        args.cancellationWindowHours !== undefined
+          ? Math.max(0, Math.min(168, Math.round(args.cancellationWindowHours)))
+          : clinic.cancellationWindowHours,
+      updatedAt: Date.now(),
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: args.clinicId,
+      actionType: "CLINIC_DETAILS_UPDATED",
+      targetEntity: "clinics",
+      targetId: args.clinicId,
+      metadata: {
+        previousName: clinic.name,
+        newName: name,
+        city: args.city.trim(),
+        province: args.province.trim(),
+      },
+    });
+
+    return { clinicId: args.clinicId };
+  },
+});
+
+export const extendClinicSubscription = mutation({
+  args: {
+    clinicId: v.id("clinics"),
+    extraDays: v.number(),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const clinic = await ctx.db.get(args.clinicId);
+    if (!clinic) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Clinic not found." });
+    }
+
+    const days = Math.round(args.extraDays);
+    if (days < 1 || days > 365) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Extension must be between 1 and 365 days.",
+      });
+    }
+
+    const now = Date.now();
+    const baseEnd = Math.max(clinic.subscriptionEndsAt, now);
+    const nextEnd = baseEnd + days * DAY_MS;
+
+    await ctx.db.patch(args.clinicId, {
+      subscriptionEndsAt: nextEnd,
+      trialEndsAt:
+        clinic.status === "trial" ? nextEnd : clinic.trialEndsAt,
+      status: clinic.status === "past_due" ? "active" : clinic.status,
+      gracePeriodEndsAt:
+        clinic.status === "past_due" ? undefined : clinic.gracePeriodEndsAt,
+      updatedAt: now,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: args.clinicId,
+      actionType: "CLINIC_SUBSCRIPTION_EXTENDED",
+      targetEntity: "clinics",
+      targetId: args.clinicId,
+      metadata: {
+        clinicName: clinic.name,
+        extraDays: days,
+        previousEndsAt: clinic.subscriptionEndsAt,
+        newEndsAt: nextEnd,
+        reason: args.reason?.trim() || null,
+      },
+    });
+
+    return { clinicId: args.clinicId, subscriptionEndsAt: nextEnd };
+  },
+});
+
 export const listAnnouncements = query({
   args: { activeOnly: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
@@ -600,6 +768,259 @@ export const toggleAnnouncement = mutation({
     });
 
     return { announcementId: args.announcementId, isActive: args.isActive };
+  },
+});
+
+export const updateAnnouncement = mutation({
+  args: {
+    announcementId: v.id("systemAnnouncements"),
+    title: v.string(),
+    message: v.string(),
+    severity: v.union(
+      v.literal("info"),
+      v.literal("warning"),
+      v.literal("critical")
+    ),
+    targetAudience: v.union(
+      v.literal("all_clinic_staff"),
+      v.literal("clinic_admins_only"),
+      v.literal("all_users")
+    ),
+    expiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const existing = await ctx.db.get(args.announcementId);
+    if (!existing) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Announcement not found.",
+      });
+    }
+
+    const title = args.title.trim();
+    const message = args.message.trim();
+    if (!title || !message) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Announcement title and message are required.",
+      });
+    }
+
+    await ctx.db.patch(args.announcementId, {
+      title,
+      message,
+      severity: args.severity,
+      targetAudience: args.targetAudience,
+      expiresAt: args.expiresAt,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      actionType: "ANNOUNCEMENT_EDITED",
+      targetEntity: "systemAnnouncements",
+      targetId: args.announcementId,
+      metadata: {
+        title,
+        severity: args.severity,
+        targetAudience: args.targetAudience,
+        expiresAt: args.expiresAt ?? null,
+      },
+    });
+
+    return { announcementId: args.announcementId };
+  },
+});
+
+export const deleteAnnouncement = mutation({
+  args: {
+    announcementId: v.id("systemAnnouncements"),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const existing = await ctx.db.get(args.announcementId);
+    if (!existing) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Announcement not found.",
+      });
+    }
+
+    await ctx.db.delete(args.announcementId);
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      actionType: "ANNOUNCEMENT_DELETED",
+      targetEntity: "systemAnnouncements",
+      targetId: args.announcementId,
+      metadata: { title: existing.title, targetAudience: existing.targetAudience },
+    });
+
+    return { announcementId: args.announcementId };
+  },
+});
+
+export const triggerDailyRollup = mutation({
+  args: {
+    targetDateKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+    const dateKey = args.targetDateKey?.trim() || toManilaDateKey(Date.now());
+
+    const result: { dateKey: string; clinicsRolledUp: number } =
+      await ctx.runMutation(internal.cronJobs.rollupDailyAnalytics, {
+        targetDateKey: dateKey,
+      });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      actionType: "PLATFORM_ROLLUP_TRIGGERED",
+      targetEntity: "platformMetricsDaily",
+      targetId: result.dateKey,
+      metadata: {
+        dateKey: result.dateKey,
+        clinicsRolledUp: result.clinicsRolledUp,
+      },
+    });
+
+    return result;
+  },
+});
+
+export const ensureDefaultPlans = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const actor = await requireSuperAdmin(ctx);
+    const result: { plansCreated: number } = await ctx.runMutation(
+      internal.seed.initializePlatform,
+      {}
+    );
+
+    if (result.plansCreated > 0) {
+      await recordAuditLog(ctx, {
+        actorUserId: actor._id,
+        actorRole: actor.role,
+        actionType: "DEFAULT_PLANS_SEEDED",
+        targetEntity: "subscriptionPlans",
+        targetId: "seed",
+        metadata: { plansCreated: result.plansCreated },
+      });
+    }
+
+    return result;
+  },
+});
+
+export const listAuditActors = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireSuperAdmin(ctx);
+
+    const [superAdmins, clinicAdmins] = await Promise.all([
+      ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", "super_admin"))
+        .take(20),
+      ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", "clinic_admin"))
+        .take(100),
+    ]);
+
+    return [...superAdmins, ...clinicAdmins].map((u) => ({
+      _id: u._id,
+      name: `${u.firstName} ${u.lastName}`.trim() || u.email,
+      email: u.email,
+      role: u.role,
+    }));
+  },
+});
+
+export const listAuditLogsPaginated = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    clinicId: v.optional(v.id("clinics")),
+    actorUserId: v.optional(v.id("users")),
+    actionType: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+
+    const result = args.clinicId
+      ? await ctx.db
+          .query("platformAuditLogs")
+          .withIndex("by_clinic_and_date", (q) => q.eq("clinicId", args.clinicId))
+          .order("desc")
+          .paginate(args.paginationOpts)
+      : args.actorUserId
+        ? await ctx.db
+            .query("platformAuditLogs")
+            .withIndex("by_actor", (q) => q.eq("actorUserId", args.actorUserId!))
+            .order("desc")
+            .paginate(args.paginationOpts)
+        : await ctx.db
+            .query("platformAuditLogs")
+            .withIndex("by_created_at")
+            .order("desc")
+            .paginate(args.paginationOpts);
+
+    const actionFilter = args.actionType?.trim();
+    const filtered = result.page.filter((log) => {
+      if (args.clinicId && args.actorUserId && log.actorUserId !== args.actorUserId) {
+        return false;
+      }
+      if (actionFilter && log.actionType !== actionFilter) {
+        return false;
+      }
+      return true;
+    });
+
+    const actorIds = Array.from(new Set(filtered.map((l) => l.actorUserId)));
+    const clinicIds = Array.from(
+      new Set(
+        filtered
+          .map((l) => l.clinicId)
+          .filter((id): id is Id<"clinics"> => id !== undefined)
+      )
+    );
+
+    const [actors, clinics] = await Promise.all([
+      Promise.all(actorIds.map((id) => ctx.db.get(id))),
+      Promise.all(clinicIds.map((id) => ctx.db.get(id))),
+    ]);
+
+    const actorMap = new Map(
+      actors
+        .filter((u): u is Doc<"users"> => u !== null)
+        .map((u) => [u._id, u])
+    );
+    const clinicMap = new Map(
+      clinics
+        .filter((c): c is Doc<"clinics"> => c !== null)
+        .map((c) => [c._id, c])
+    );
+
+    return {
+      ...result,
+      page: filtered.map((log) => {
+        const actor = actorMap.get(log.actorUserId);
+        const clinic = log.clinicId ? clinicMap.get(log.clinicId) : null;
+        return {
+          ...log,
+          actorName: actor
+            ? `${actor.firstName} ${actor.lastName}`.trim() || actor.email
+            : "Unknown User",
+          actorEmail: actor?.email ?? "",
+          clinicName: clinic?.name ?? null,
+        };
+      }),
+    };
   },
 });
 

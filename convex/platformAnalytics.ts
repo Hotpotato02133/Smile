@@ -34,26 +34,49 @@ export const getDashboardOverview = query({
     monthStart.setUTCHours(0, 0, 0, 0);
     const monthStartMs = monthStart.getTime();
     const expiringCutoff = now + 7 * DAY_MS;
+    const thirtyDaysAgoKey = toManilaDateKey(now - 29 * DAY_MS);
+    const todayKey = toManilaDateKey(now);
 
-    const [clinics, plans, paidThisMonth, expiringByDate, pastDueClinics] =
-      await Promise.all([
-        ctx.db.query("clinics").collect(),
-        ctx.db.query("subscriptionPlans").collect(),
-        ctx.db
-          .query("subscriptionPayments")
-          .withIndex("by_paid_at", (q) => q.gte("paidAt", monthStartMs))
-          .collect(),
-        ctx.db
-          .query("clinics")
-          .withIndex("by_subscription_end", (q) =>
-            q.lte("subscriptionEndsAt", expiringCutoff)
-          )
-          .collect(),
-        ctx.db
-          .query("clinics")
-          .withIndex("by_status", (q) => q.eq("status", "past_due"))
-          .collect(),
-      ]);
+    const [
+      clinics,
+      plans,
+      paidThisMonth,
+      expiringByDate,
+      pastDueClinics,
+      recentMetrics,
+      pendingPayments,
+      activeAnnouncements,
+    ] = await Promise.all([
+      ctx.db.query("clinics").take(500),
+      ctx.db.query("subscriptionPlans").take(50),
+      ctx.db
+        .query("subscriptionPayments")
+        .withIndex("by_paid_at", (q) => q.gte("paidAt", monthStartMs))
+        .take(500),
+      ctx.db
+        .query("clinics")
+        .withIndex("by_subscription_end", (q) =>
+          q.lte("subscriptionEndsAt", expiringCutoff)
+        )
+        .take(200),
+      ctx.db
+        .query("clinics")
+        .withIndex("by_status", (q) => q.eq("status", "past_due"))
+        .take(200),
+      ctx.db
+        .query("platformMetricsDaily")
+        .withIndex("by_date", (q) => q.gte("dateKey", thirtyDaysAgoKey))
+        .order("desc")
+        .take(31),
+      ctx.db
+        .query("subscriptionPayments")
+        .withIndex("by_status", (q) => q.eq("status", "pending"))
+        .take(100),
+      ctx.db
+        .query("systemAnnouncements")
+        .withIndex("by_active", (q) => q.eq("isActive", true))
+        .take(50),
+    ]);
 
     const planMap = new Map<Id<"subscriptionPlans">, Doc<"subscriptionPlans">>(
       plans.map((p) => [p._id, p])
@@ -101,9 +124,42 @@ export const getDashboardOverview = query({
       }
     }
 
-    const collectedThisMonthPhp = paidThisMonth
-      .filter((p) => p.status === "paid")
-      .reduce((sum, p) => sum + p.amountPhp, 0);
+    const paidInvoicesThisMonth = paidThisMonth.filter((p) => p.status === "paid");
+    const collectedThisMonthPhp = paidInvoicesThisMonth.reduce(
+      (sum, p) => sum + p.amountPhp,
+      0
+    );
+
+    const todayRow = recentMetrics.find((m) => m.dateKey === todayKey);
+    const todayAppointments = todayRow?.totalAppointmentsBooked ?? 0;
+    const thirtyDayTotalBooked = recentMetrics.reduce(
+      (sum, m) => sum + m.totalAppointmentsBooked,
+      0
+    );
+    const thirtyDayCompleted = recentMetrics.reduce(
+      (sum, m) => sum + m.completedAppointments,
+      0
+    );
+    const thirtyDayCancelled = recentMetrics.reduce(
+      (sum, m) => sum + m.cancelledAppointments,
+      0
+    );
+    const thirtyDayNoShow = recentMetrics.reduce(
+      (sum, m) => sum + m.noShowAppointments,
+      0
+    );
+    const completionRatePct =
+      thirtyDayTotalBooked > 0
+        ? Math.round((thirtyDayCompleted / thirtyDayTotalBooked) * 100)
+        : 0;
+    const noShowRatePct =
+      thirtyDayTotalBooked > 0
+        ? Math.round((thirtyDayNoShow / thirtyDayTotalBooked) * 100)
+        : 0;
+    const lastRollupAt = recentMetrics[0]?.updatedAt ?? null;
+    const activeAnnouncementsCount = activeAnnouncements.filter(
+      (a) => !a.expiresAt || a.expiresAt >= now
+    ).length;
 
     // Deduplicate renewal queue (expiring within 7 days OR currently past_due, excluding archived)
     const renewalMap = new Map<Id<"clinics">, Doc<"clinics">>();
@@ -142,8 +198,19 @@ export const getDashboardOverview = query({
       mrrPhp,
       arrPhp: mrrPhp * 12,
       collectedThisMonthPhp,
+      paidInvoicesThisMonthCount: paidInvoicesThisMonth.length,
+      pendingPaymentsCount: pendingPayments.length,
+      activeAnnouncementsCount,
       currentMonthAppointments,
       lifetimeAppointments,
+      todayAppointments,
+      thirtyDayTotalBooked,
+      thirtyDayCompleted,
+      thirtyDayCancelled,
+      thirtyDayNoShow,
+      completionRatePct,
+      noShowRatePct,
+      lastRollupAt,
       planDistribution: Array.from(planBuckets.values()),
       statusDistribution: [
         { status: "active", label: "Active", count: activePaidClinics },

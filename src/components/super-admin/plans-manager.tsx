@@ -2,21 +2,13 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "convex/react";
-import { Check, Pencil, Plus } from "lucide-react";
+import { Check, Pencil, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -67,8 +59,10 @@ type PlanFormValues = z.output<typeof planSchema>;
 export function PlansManager() {
   const plans = useQuery(api.subscriptions.listPlans, {});
   const upsertPlan = useMutation(api.subscriptions.upsertPlan);
+  const ensureDefaultPlans = useMutation(api.superAdmin.ensureDefaultPlans);
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Doc<"subscriptionPlans"> | null>(
     null
   );
@@ -97,6 +91,22 @@ export function PlansManager() {
   });
 
   const watched = useWatch({ control: form.control });
+
+  const handleSeedDefaults = async () => {
+    setSeeding(true);
+    try {
+      const res = await ensureDefaultPlans({});
+      toast.success(
+        res.plansCreated > 0
+          ? `Created ${res.plansCreated} default plans (Trial, Starter, Pro).`
+          : "All default plans already exist."
+      );
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Failed to seed plans."));
+    } finally {
+      setSeeding(false);
+    }
+  };
 
   const openEdit = (plan: Doc<"subscriptionPlans">) => {
     setEditingPlan(plan);
@@ -181,138 +191,210 @@ export function PlansManager() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-950">
             Subscription Plans
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Configure PHP pricing, dentist/chair/appointment quotas, and default
+          <p className="text-sm text-slate-600">
+            Configure PHP pricing, dentist and chair quotas, and default
             clinical feature gates.
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="mr-1.5 size-4" />
-          Add Plan Tier
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {plans && plans.length < 3 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={seeding}
+              onClick={handleSeedDefaults}
+              className="h-9 rounded-full border-slate-200 px-3.5 text-xs font-semibold"
+            >
+              <Sparkles className="mr-1.5 size-3.5 text-[#6C5CE7]" />
+              {seeding ? "Seeding…" : "Seed Default Plans"}
+            </Button>
+          ) : null}
+          <Button
+            onClick={openCreate}
+            className="h-9 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
+          >
+            <Plus className="mr-1.5 size-4" />
+            Add Plan Tier
+          </Button>
+        </div>
       </div>
 
       {plans === undefined ? (
-        <p className="text-sm text-muted-foreground">Loading plans…</p>
-      ) : plans.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            No subscription plans found. Run{" "}
-            <code>npx convex run seed:initializePlatform</code> or add a plan
-            tier above.
-          </CardContent>
-        </Card>
-      ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {plans.map((plan) => (
-            <Card key={plan._id} className="flex flex-col">
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2">
-                  <Badge variant="outline" className="font-mono uppercase">
-                    {plan.code}
-                  </Badge>
-                  <Badge variant={plan.isActive ? "secondary" : "destructive"}>
-                    {plan.isActive ? "Active" : "Disabled"}
-                  </Badge>
-                </div>
-                <CardTitle className="mt-2">{plan.name}</CardTitle>
-                <CardDescription>{plan.description}</CardDescription>
-              </CardHeader>
-
-              <CardContent className="flex-1 space-y-4">
-                <div>
-                  <p className="font-mono text-3xl font-semibold tabular-nums">
-                    {formatPhp(plan.monthlyPricePhp)}
-                    <span className="text-sm font-normal text-muted-foreground">
-                      /mo
-                    </span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatPhp(plan.annualPricePhp)}/yr
-                    {plan.trialDays > 0 ? ` · ${plan.trialDays}-day trial` : ""}
-                  </p>
-                </div>
-
-                <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Dentists</span>
-                    <span className="font-mono font-medium">
-                      Up to {plan.maxDentists}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Operatory Chairs</span>
-                    <span className="font-mono font-medium">
-                      Up to {plan.maxChairs}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Monthly Appts</span>
-                    <span className="font-mono font-medium">
-                      {plan.maxAppointmentsPerMonth.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">X-Ray Storage</span>
-                    <span className="font-mono font-medium">
-                      {formatBytes(plan.maxStorageBytes)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Monthly Emails</span>
-                    <span className="font-mono font-medium">
-                      {plan.maxEmailsPerMonth.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-1 text-xs">
-                  {[
-                    ["Odontogram", plan.defaultFeatures.odontogramEnabled],
-                    ["X-Ray Vault", plan.defaultFeatures.xrayStorageEnabled],
-                    [
-                      "Waitlist Blast",
-                      plan.defaultFeatures.waitlistAutomationEnabled,
-                    ],
-                    [
-                      "6-Month Recall",
-                      plan.defaultFeatures.recallAutomationEnabled,
-                    ],
-                    [
-                      "Custom Branding",
-                      plan.defaultFeatures.customBrandingEnabled,
-                    ],
-                  ].map(([label, enabled]) => (
-                    <div
-                      key={String(label)}
-                      className={`flex items-center gap-1.5 ${
-                        enabled ? "text-foreground" : "text-muted-foreground/50 line-through"
-                      }`}
-                    >
-                      <Check className="size-3.5 shrink-0" />
-                      <span>{String(label)}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-
-              <CardFooter>
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => openEdit(plan)}
-                >
-                  <Pencil className="mr-1.5 size-3.5" />
-                  Edit Plan & Quotas
-                </Button>
-              </CardFooter>
-            </Card>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-96 animate-pulse rounded-2xl bg-slate-100"
+            />
           ))}
+        </div>
+      ) : plans.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-[#F8FAFC] px-6 py-14 text-center">
+          <p className="text-sm font-semibold text-slate-800">
+            No subscription plans configured yet
+          </p>
+          <p className="mt-1 max-w-md text-xs text-slate-500">
+            Initialize the default Smile tiers (Free 14-Day Trial, Smile
+            Starter, and Smile Pro Clinic) in one click or add a custom tier.
+          </p>
+          <Button
+            type="button"
+            disabled={seeding}
+            onClick={handleSeedDefaults}
+            className="mt-4 h-9 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
+          >
+            <Sparkles className="mr-1.5 size-3.5" />
+            {seeding ? "Seeding…" : "Seed Default Plans"}
+          </Button>
+        </div>
+      ) : (
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {plans.map((plan) => {
+            const annualSavings =
+              plan.monthlyPricePhp > 0 && plan.annualPricePhp > 0
+                ? plan.monthlyPricePhp * 12 - plan.annualPricePhp
+                : 0;
+            return (
+              <article
+                key={plan._id}
+                className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5"
+              >
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge
+                      variant="outline"
+                      className="rounded-full border-slate-200 bg-[#F8FAFC] font-mono text-[11px] uppercase text-slate-700"
+                    >
+                      {plan.code}
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className={
+                        plan.isActive
+                          ? "rounded-full border-emerald-200 bg-emerald-50 text-[11px] font-semibold text-emerald-800"
+                          : "rounded-full border-rose-200 bg-rose-50 text-[11px] font-semibold text-rose-800"
+                      }
+                    >
+                      {plan.isActive ? "Active" : "Disabled"}
+                    </Badge>
+                  </div>
+
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">
+                      {plan.name}
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {plan.description}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-3xl font-bold tracking-tight tabular-nums text-slate-950">
+                      {formatPhp(plan.monthlyPricePhp)}
+                      <span className="text-sm font-normal text-slate-500">
+                        /mo
+                      </span>
+                    </p>
+                    <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+                      {formatPhp(plan.annualPricePhp)}/yr
+                      {annualSavings > 0
+                        ? ` · Save ${formatPhp(annualSavings)}/yr`
+                        : ""}
+                      {plan.trialDays > 0
+                        ? ` · ${plan.trialDays}-day trial`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5 rounded-xl border border-slate-200/75 bg-[#F8FAFC] p-3.5 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Dentists</span>
+                      <span className="font-semibold tabular-nums text-slate-900">
+                        Up to {plan.maxDentists}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Operatory Chairs</span>
+                      <span className="font-semibold tabular-nums text-slate-900">
+                        Up to {plan.maxChairs}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Monthly Appts</span>
+                      <span className="font-semibold tabular-nums text-slate-900">
+                        {plan.maxAppointmentsPerMonth.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">X-Ray Storage</span>
+                      <span className="font-semibold tabular-nums text-slate-900">
+                        {formatBytes(plan.maxStorageBytes)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Monthly Emails</span>
+                      <span className="font-semibold tabular-nums text-slate-900">
+                        {plan.maxEmailsPerMonth.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    {(
+                      [
+                        ["32-Tooth Odontogram", plan.defaultFeatures.odontogramEnabled],
+                        ["X-Ray & Photo Vault", plan.defaultFeatures.xrayStorageEnabled],
+                        [
+                          "Waitlist Cancellation Blast",
+                          plan.defaultFeatures.waitlistAutomationEnabled,
+                        ],
+                        [
+                          "6-Month Hygiene Recall",
+                          plan.defaultFeatures.recallAutomationEnabled,
+                        ],
+                        [
+                          "Custom Clinic Branding",
+                          plan.defaultFeatures.customBrandingEnabled,
+                        ],
+                      ] as const
+                    ).map(([label, enabled]) => (
+                      <div
+                        key={label}
+                        className={`flex items-center gap-2 ${
+                          enabled
+                            ? "font-medium text-slate-800"
+                            : "text-slate-400 line-through"
+                        }`}
+                      >
+                        <Check
+                          className={`size-3.5 shrink-0 ${
+                            enabled ? "text-[#6C5CE7]" : "text-slate-300"
+                          }`}
+                        />
+                        <span>{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-5 pt-4 border-t border-slate-100">
+                  <Button
+                    variant="outline"
+                    className="h-9 w-full rounded-full border-slate-200 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                    onClick={() => openEdit(plan)}
+                  >
+                    <Pencil className="mr-1.5 size-3.5" />
+                    Edit Plan &amp; Quotas
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
 
@@ -320,11 +402,13 @@ export function PlansManager() {
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              {editingPlan ? `Edit ${editingPlan.name}` : "Create Subscription Plan"}
+              {editingPlan
+                ? `Edit ${editingPlan.name}`
+                : "Create Subscription Plan"}
             </DialogTitle>
             <DialogDescription>
-              Quotas are enforced inside Convex mutations via{" "}
-              <code>assertClinicCanWrite</code>.
+              Resource ceilings and feature gates apply automatically across all
+              clinics assigned to this tier.
             </DialogDescription>
           </DialogHeader>
 
@@ -375,7 +459,7 @@ export function PlansManager() {
                 <Input
                   id="plan-mo"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("monthlyPricePhp")}
                 />
               </div>
@@ -384,7 +468,7 @@ export function PlansManager() {
                 <Input
                   id="plan-yr"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("annualPricePhp")}
                 />
               </div>
@@ -393,7 +477,7 @@ export function PlansManager() {
                 <Input
                   id="plan-trial"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("trialDays")}
                 />
               </div>
@@ -405,7 +489,7 @@ export function PlansManager() {
                 <Input
                   id="plan-dentists"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("maxDentists")}
                 />
               </div>
@@ -414,7 +498,7 @@ export function PlansManager() {
                 <Input
                   id="plan-chairs"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("maxChairs")}
                 />
               </div>
@@ -423,7 +507,7 @@ export function PlansManager() {
                 <Input
                   id="plan-appts"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("maxAppointmentsPerMonth")}
                 />
               </div>
@@ -435,7 +519,7 @@ export function PlansManager() {
                 <Input
                   id="plan-storage"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("maxStorageMb")}
                 />
               </div>
@@ -444,14 +528,16 @@ export function PlansManager() {
                 <Input
                   id="plan-emails"
                   type="number"
-                  className="font-mono"
+                  className="tabular-nums"
                   {...form.register("maxEmailsPerMonth")}
                 />
               </div>
             </div>
 
-            <div className="space-y-2 rounded-lg border p-3">
-              <p className="text-xs font-semibold">Default Feature Flags</p>
+            <div className="space-y-2.5 rounded-xl border border-slate-200/80 bg-[#F8FAFC] p-3.5">
+              <p className="text-xs font-semibold text-slate-900">
+                Default Feature Flags
+              </p>
               {(
                 [
                   ["odontogramEnabled", "32-Tooth SVG Odontogram"],
@@ -462,7 +548,10 @@ export function PlansManager() {
                   ["isActive", "Plan Active for New Sign-ups"],
                 ] as const
               ).map(([field, label]) => (
-                <div key={field} className="flex items-center justify-between text-xs">
+                <div
+                  key={field}
+                  className="flex items-center justify-between text-xs text-slate-700"
+                >
                   <span>{label}</span>
                   <Switch
                     checked={Boolean(watched[field])}
@@ -480,7 +569,11 @@ export function PlansManager() {
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={form.formState.isSubmitting}>
+              <Button
+                type="submit"
+                disabled={form.formState.isSubmitting}
+                className="bg-[#6C5CE7] text-white hover:bg-[#5B4BD6]"
+              >
                 {form.formState.isSubmitting ? "Saving…" : "Save Plan"}
               </Button>
             </DialogFooter>
