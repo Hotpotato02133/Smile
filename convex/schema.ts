@@ -86,6 +86,7 @@ export default defineSchema({
     slotIntervalMinutes: v.number(), // 15 or 30
     cancellationWindowHours: v.number(), // e.g., 24 hours
     emergencyBufferMinutesPerDay: v.number(),
+    requireBookingApproval: v.optional(v.boolean()), // When true, online bookings enter pending_approval for front-desk review
     operatingHours: v.array(
       v.object({
         dayOfWeek: v.number(), // 0 (Sun) to 6 (Sat)

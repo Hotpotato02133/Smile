@@ -16,7 +16,24 @@ export type AvailableSlot = {
   dentistName: string;
   chairId: Id<"chairs">;
   chairName: string;
+  isEmergencyBufferSlot: boolean;
 };
+
+/**
+ * Computes the daily emergency buffer block `[startMinute, endMinute)` reserved
+ * at the end of the clinic's open hours for walk-in / emergency triage.
+ */
+export function getEmergencyBufferWindow(
+  clinicDay: { isOpen: boolean; openMinute: number; closeMinute: number } | undefined,
+  emergencyBufferMinutesPerDay: number
+): { startMinute: number; endMinute: number } | null {
+  if (!clinicDay || !clinicDay.isOpen) return null;
+  const mins = Math.max(0, Math.round(emergencyBufferMinutesPerDay));
+  if (mins <= 0) return null;
+  const startMinute = Math.max(clinicDay.openMinute, clinicDay.closeMinute - mins);
+  if (startMinute >= clinicDay.closeMinute) return null;
+  return { startMinute, endMinute: clinicDay.closeMinute };
+}
 
 /** Checks whether two half-open intervals [aStart, aEnd) and [bStart, bEnd) overlap. */
 export function intervalsOverlap(
@@ -209,10 +226,18 @@ export async function computeAvailableSlots(
     preferredDentistId?: Id<"dentists">;
     ignoreSessionId?: string;
     ignoreAppointmentId?: Id<"appointments">;
+    includeEmergencyBuffer?: boolean;
   }
 ): Promise<AvailableSlot[]> {
-  const { clinic, service, dateKey, preferredDentistId, ignoreSessionId, ignoreAppointmentId } =
-    params;
+  const {
+    clinic,
+    service,
+    dateKey,
+    preferredDentistId,
+    ignoreSessionId,
+    ignoreAppointmentId,
+    includeEmergencyBuffer = false,
+  } = params;
   const now = Date.now();
 
   if (!parseDateKey(dateKey)) return [];
@@ -222,6 +247,11 @@ export async function computeAvailableSlots(
   const dayOfWeek = getDayOfWeekFromDateKey(dateKey);
   const clinicDay = clinic.operatingHours.find((h) => h.dayOfWeek === dayOfWeek);
   if (!clinicDay || !clinicDay.isOpen) return [];
+
+  const emergencyWindow = getEmergencyBufferWindow(
+    clinicDay,
+    clinic.emergencyBufferMinutesPerDay
+  );
 
   const durationMinutes = service.durationMinutes;
   const totalBlockMinutes = durationMinutes + service.bufferMinutes;
@@ -300,8 +330,10 @@ export async function computeAvailableSlots(
     (t) => t.endTimeUtc > dayStartUtc && t.startTimeUtc < dayEndUtc
   );
 
-  // Small lead time so patients cannot book slots in the past (15-min lead)
-  const minBookableUtc = now + 15 * 60 * 1000;
+  // Small lead time for online self-service; staff walk-in lookup includes immediate slots
+  const minBookableUtc = includeEmergencyBuffer
+    ? now - 5 * 60 * 1000
+    : now + 15 * 60 * 1000;
   const slots: AvailableSlot[] = [];
 
   for (
@@ -310,6 +342,19 @@ export async function computeAvailableSlots(
     candidateMinute += slotInterval
   ) {
     const slotEndMinute = candidateMinute + durationMinutes;
+    const isEmergencyBufferSlot = Boolean(
+      emergencyWindow &&
+        intervalsOverlap(
+          candidateMinute,
+          slotEndMinute,
+          emergencyWindow.startMinute,
+          emergencyWindow.endMinute
+        )
+    );
+    if (isEmergencyBufferSlot && !includeEmergencyBuffer) {
+      continue;
+    }
+
     const slotStartUtc = localDateMinuteToUtc(dateKey, candidateMinute, timeZone);
     if (slotStartUtc < minBookableUtc) continue;
 
@@ -424,6 +469,7 @@ export async function computeAvailableSlots(
         dentistName: assignedPair.dentist.displayName,
         chairId: assignedPair.chair._id,
         chairName: assignedPair.chair.name,
+        isEmergencyBufferSlot,
       });
     }
   }
@@ -447,6 +493,7 @@ export async function verifySpecificPairAvailable(
     ignoreSessionId?: string;
     ignoreAppointmentId?: Id<"appointments">;
     enforceScheduleRules?: boolean;
+    allowEmergencyBuffer?: boolean;
     minLeadMinutes?: number;
   }
 ): Promise<{
@@ -465,6 +512,7 @@ export async function verifySpecificPairAvailable(
     ignoreSessionId,
     ignoreAppointmentId,
     enforceScheduleRules = false,
+    allowEmergencyBuffer = false,
     minLeadMinutes = 0,
   } = params;
 
@@ -509,6 +557,29 @@ export async function verifySpecificPairAvailable(
         endTimeUtc,
         bufferEndTimeUtc,
       };
+    }
+    if (!allowEmergencyBuffer) {
+      const emergencyWindow = getEmergencyBufferWindow(
+        clinicDay,
+        clinic.emergencyBufferMinutesPerDay
+      );
+      if (
+        emergencyWindow &&
+        intervalsOverlap(
+          local.minuteOfDay,
+          local.minuteOfDay + service.durationMinutes,
+          emergencyWindow.startMinute,
+          emergencyWindow.endMinute
+        )
+      ) {
+        return {
+          ok: false,
+          reason:
+            "This time block is reserved for the clinic's daily emergency walk-in buffer.",
+          endTimeUtc,
+          bufferEndTimeUtc,
+        };
+      }
     }
   }
 

@@ -141,6 +141,7 @@ export const getPublicClinicBySlug = query({
         timezone: clinic.timezone,
         slotIntervalMinutes: clinic.slotIntervalMinutes,
         cancellationWindowHours: clinic.cancellationWindowHours,
+        requireBookingApproval: Boolean(clinic.requireBookingApproval),
         operatingHours: clinic.operatingHours,
         waitlistAutomationEnabled: clinic.featureFlags.waitlistAutomationEnabled,
         isBookable: eligibility.isBookable,
@@ -394,7 +395,11 @@ export const createOnlineBooking = mutation({
       }
     }
 
-    // Insert appointment
+    // Insert appointment (respecting clinic's front-desk approval policy)
+    const initialStatus = clinic.requireBookingApproval
+      ? ("pending_approval" as const)
+      : ("confirmed" as const);
+
     const appointmentId = await ctx.db.insert("appointments", {
       clinicId: args.clinicId,
       patientId: targetPatientId,
@@ -405,7 +410,7 @@ export const createOnlineBooking = mutation({
       startTimeUtc: args.startTimeUtc,
       endTimeUtc: availabilityCheck.endTimeUtc,
       bufferEndTimeUtc: availabilityCheck.bufferEndTimeUtc,
-      status: "confirmed",
+      status: initialStatus,
       bookingSource: "patient_online",
       chiefComplaint: args.chiefComplaint?.trim() || undefined,
       reminder24hSent: false,
@@ -445,12 +450,15 @@ export const createOnlineBooking = mutation({
       updatedAt: now,
     });
 
-    // Fire Resend booking confirmation asynchronously (internalAction)
-    await ctx.scheduler.runAfter(
-      0,
-      internal.notifications.sendBookingConfirmation,
-      { appointmentId }
-    );
+    // Fire Resend booking confirmation immediately if auto-confirmed;
+    // when pending_approval is enabled, front-desk approval dispatches the confirmation email.
+    if (initialStatus === "confirmed") {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendBookingConfirmation,
+        { appointmentId }
+      );
+    }
 
     const [dentist, chair] = await Promise.all([
       ctx.db.get(args.dentistId),
@@ -459,6 +467,7 @@ export const createOnlineBooking = mutation({
 
     return {
       appointmentId,
+      status: initialStatus,
       referenceCode: formatReferenceCode(appointmentId),
       clinicName: clinic.name,
       clinicSlug: clinic.slug,

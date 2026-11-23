@@ -18,6 +18,7 @@ export const getAvailableSlots = query({
     preferredDentistId: v.optional(v.id("dentists")),
     sessionId: v.optional(v.string()),
     ignoreAppointmentId: v.optional(v.id("appointments")),
+    includeEmergencyBuffer: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const [clinic, service] = await Promise.all([
@@ -42,29 +43,40 @@ export const getAvailableSlots = query({
       };
     }
 
-    // Only ignore an appointment when the caller is authenticated and owns it (or is staff of this clinic)
+    // Resolve caller when requesting staff-only privileges (emergency buffer or ignoreAppointmentId)
     let verifiedIgnoreAppointmentId: Id<"appointments"> | undefined;
-    if (args.ignoreAppointmentId) {
+    let verifiedIncludeEmergencyBuffer = false;
+    if (args.ignoreAppointmentId || args.includeEmergencyBuffer) {
       const identity = await ctx.auth.getUserIdentity();
       if (identity) {
         const user = await ctx.db
           .query("users")
           .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
           .unique();
-        const appt = await ctx.db.get(args.ignoreAppointmentId);
-        if (user && user.isActive && appt && appt.clinicId === clinic._id) {
-          if (user.clinicId === clinic._id && user.role !== "patient") {
-            verifiedIgnoreAppointmentId = appt._id;
-          } else {
-            const patient = await ctx.db.get(appt.patientId);
-            if (patient) {
-              let owns = patient.userId === user._id;
-              if (!owns && patient.guardianPatientId) {
-                const guardian = await ctx.db.get(patient.guardianPatientId);
-                owns = guardian?.userId === user._id;
-              }
-              if (owns) {
+        if (user && user.isActive) {
+          const isClinicStaff =
+            (user.clinicId === clinic._id && user.role !== "patient") ||
+            user.role === "super_admin";
+          if (args.includeEmergencyBuffer && isClinicStaff) {
+            verifiedIncludeEmergencyBuffer = true;
+          }
+          if (args.ignoreAppointmentId) {
+            const appt = await ctx.db.get(args.ignoreAppointmentId);
+            if (appt && appt.clinicId === clinic._id) {
+              if (isClinicStaff) {
                 verifiedIgnoreAppointmentId = appt._id;
+              } else {
+                const patient = await ctx.db.get(appt.patientId);
+                if (patient) {
+                  let owns = patient.userId === user._id;
+                  if (!owns && patient.guardianPatientId) {
+                    const guardian = await ctx.db.get(patient.guardianPatientId);
+                    owns = guardian?.userId === user._id;
+                  }
+                  if (owns) {
+                    verifiedIgnoreAppointmentId = appt._id;
+                  }
+                }
               }
             }
           }
@@ -79,6 +91,7 @@ export const getAvailableSlots = query({
       preferredDentistId: args.preferredDentistId,
       ignoreSessionId: args.sessionId,
       ignoreAppointmentId: verifiedIgnoreAppointmentId,
+      includeEmergencyBuffer: verifiedIncludeEmergencyBuffer,
     });
 
     return {

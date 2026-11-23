@@ -133,6 +133,14 @@ export function formatMinutes12h(minutes: number): string {
 
 /** Returns today's `"YYYY-MM-DD"` in the given IANA timezone. */
 export function getTodayDateKeyInTimeZone(timeZone = "Asia/Manila"): string {
+  return dateToDateKeyInTimeZone(new Date(), timeZone);
+}
+
+/** Formats a Date or epoch ms as `"YYYY-MM-DD"` in the given IANA timezone. */
+export function dateToDateKeyInTimeZone(
+  input: Date | number,
+  timeZone = "Asia/Manila"
+): string {
   try {
     const formatter = new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -140,15 +148,107 @@ export function getTodayDateKeyInTimeZone(timeZone = "Asia/Manila"): string {
       month: "2-digit",
       day: "2-digit",
     });
-    const parts = formatter.formatToParts(new Date());
+    const parts = formatter.formatToParts(typeof input === "number" ? new Date(input) : input);
     const year = parts.find((p) => p.type === "year")?.value ?? "2026";
     const month = parts.find((p) => p.type === "month")?.value ?? "01";
     const day = parts.find((p) => p.type === "day")?.value ?? "01";
     return `${year}-${month}-${day}`;
   } catch {
-    const d = new Date();
+    const d = typeof input === "number" ? new Date(input) : input;
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
+}
+
+/** Formats an epoch timestamp as a time string (e.g. `"9:30 AM"`) in the clinic's IANA timezone. */
+export function formatTimeInTimeZone(
+  timestampMs: number,
+  timeZone = "Asia/Manila"
+): string {
+  try {
+    return new Intl.DateTimeFormat("en-PH", {
+      timeZone,
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(timestampMs));
+  } catch {
+    return new Intl.DateTimeFormat("en-PH", {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(timestampMs));
+  }
+}
+
+/** Converts an epoch timestamp into `"HH:MM"` (24h) in the clinic's IANA timezone. */
+export function utcMsToTimeInputInTimeZone(
+  timestampMs: number,
+  timeZone = "Asia/Manila"
+): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(new Date(timestampMs));
+    const hourRaw = Number(parts.find((p) => p.type === "hour")?.value ?? 9);
+    const hour = hourRaw === 24 ? 0 : hourRaw;
+    const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  } catch {
+    const d = new Date(timestampMs);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+}
+
+function getZoneOffsetMs(utcMs: number, timeZone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(new Date(utcMs));
+    const lookup = (type: string) =>
+      Number(parts.find((p) => p.type === type)?.value ?? 0);
+    const hour = lookup("hour") === 24 ? 0 : lookup("hour");
+    const asUtc = Date.UTC(
+      lookup("year"),
+      lookup("month") - 1,
+      lookup("day"),
+      hour,
+      lookup("minute"),
+      lookup("second")
+    );
+    return asUtc - utcMs;
+  } catch {
+    return 8 * 60 * 60 * 1000;
+  }
+}
+
+/** Converts `(dateKey "YYYY-MM-DD", timeHHMM "HH:MM")` in `timeZone` to UTC epoch ms. */
+export function localDateTimeToUtc(
+  dateKey: string,
+  timeHHMM: string,
+  timeZone = "Asia/Manila"
+): number {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(timeHHMM.trim());
+  if (!dateMatch || !timeMatch) return Number.NaN;
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return Number.NaN;
+  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const offset1 = getZoneOffsetMs(wallAsUtc, timeZone);
+  const guess = wallAsUtc - offset1;
+  const offset2 = getZoneOffsetMs(guess, timeZone);
+  return wallAsUtc - offset2;
 }
 
 /** Converts a `"YYYY-MM-DD"` calendar key to a local Date at 00:00:00 (safe for DayPicker). */

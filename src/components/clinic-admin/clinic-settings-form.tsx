@@ -58,6 +58,7 @@ const settingsSchema = z.object({
   slotIntervalMinutes: z.enum(["15", "30"]),
   cancellationWindowHours: z.coerce.number().min(0).max(168),
   emergencyBufferMinutesPerDay: z.coerce.number().min(0).max(240),
+  requireBookingApproval: z.boolean(),
 });
 
 type SettingsFormInput = z.input<typeof settingsSchema>;
@@ -101,6 +102,7 @@ function ClinicSettingsEditor({
       slotIntervalMinutes: clinic.slotIntervalMinutes === 15 ? "15" : "30",
       cancellationWindowHours: clinic.cancellationWindowHours,
       emergencyBufferMinutesPerDay: clinic.emergencyBufferMinutesPerDay,
+      requireBookingApproval: Boolean(clinic.requireBookingApproval),
     },
   });
 
@@ -111,6 +113,10 @@ function ClinicSettingsEditor({
   const watchedColor = useWatch({
     control: form.control,
     name: "primaryColorHex",
+  });
+  const watchedRequireApproval = useWatch({
+    control: form.control,
+    name: "requireBookingApproval",
   });
 
   const customBrandingEnabled = clinic.featureFlags.customBrandingEnabled;
@@ -165,6 +171,7 @@ function ClinicSettingsEditor({
         slotIntervalMinutes: Number(values.slotIntervalMinutes),
         cancellationWindowHours: values.cancellationWindowHours,
         emergencyBufferMinutesPerDay: values.emergencyBufferMinutesPerDay,
+        requireBookingApproval: values.requireBookingApproval,
         operatingHours,
       });
       toast.success("Clinic settings and operating hours saved.");
@@ -394,6 +401,28 @@ function ClinicSettingsEditor({
                   {...form.register("emergencyBufferMinutesPerDay")}
                 />
               </div>
+            </div>
+
+            <div className="flex items-start justify-between gap-3 rounded-lg border bg-muted/25 p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="set-approval" className="text-sm font-medium">
+                  Require Front-Desk Approval for Online Bookings
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  When enabled, patient online bookings enter{" "}
+                  <code>pending_approval</code> and appear in the{" "}
+                  <code>/front-desk</code> Pending Requests queue until approved
+                  by reception.
+                </p>
+              </div>
+              <Switch
+                id="set-approval"
+                disabled={isReadOnly}
+                checked={watchedRequireApproval}
+                onCheckedChange={(checked) =>
+                  form.setValue("requireBookingApproval", checked)
+                }
+              />
             </div>
           </CardContent>
         </Card>

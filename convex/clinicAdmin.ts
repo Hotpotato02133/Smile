@@ -1187,6 +1187,7 @@ export const updateClinicSettings = mutation({
     slotIntervalMinutes: v.number(),
     cancellationWindowHours: v.number(),
     emergencyBufferMinutesPerDay: v.number(),
+    requireBookingApproval: v.optional(v.boolean()),
     operatingHours: v.array(operatingHoursDayValidator),
   },
   handler: async (ctx, args) => {
@@ -1246,6 +1247,10 @@ export const updateClinicSettings = mutation({
         0,
         args.emergencyBufferMinutesPerDay
       ),
+      requireBookingApproval:
+        args.requireBookingApproval !== undefined
+          ? args.requireBookingApproval
+          : clinic.requireBookingApproval ?? false,
       operatingHours: args.operatingHours,
       updatedAt: Date.now(),
     });
@@ -1260,6 +1265,8 @@ export const updateClinicSettings = mutation({
       metadata: {
         name: args.name.trim(),
         slotIntervalMinutes: args.slotIntervalMinutes === 15 ? 15 : 30,
+        requireBookingApproval:
+          args.requireBookingApproval ?? clinic.requireBookingApproval ?? false,
       },
     });
 

@@ -468,6 +468,7 @@ export const notifyWaitlistForCancellation = internalMutation({
       .take(100);
 
     const matching = waiting
+      .sort((a, b) => a.createdAt - b.createdAt)
       .filter((w) => {
         const dentistMatches =
           !args.dentistId ||
@@ -478,36 +479,39 @@ export const notifyWaitlistForCancellation = internalMutation({
           w.preferredTimeWindow === "any" ||
           w.preferredTimeWindow === slotWindow;
         return dentistMatches && windowMatches;
-      })
-      .slice(0, 5);
+      });
 
     let notified = 0;
     for (const entry of matching) {
+      if (notified >= 5) break;
       const [patient, service] = await Promise.all([
         ctx.db.get(entry.patientId),
         ctx.db.get(entry.serviceId),
       ]);
+      const recipientEmail = patient?.email?.trim();
+      if (!patient || !recipientEmail) {
+        // Keep phone-only walk-in patients in "waiting" so staff can call them directly
+        continue;
+      }
+
       await ctx.db.patch(entry._id, { status: "notified" });
       notified++;
 
-      const recipientEmail = patient?.email?.trim();
-      if (patient && recipientEmail) {
-        await ctx.scheduler.runAfter(
-          0,
-          internal.notifications.sendWaitlistOpeningBlast,
-          {
-            clinicId: clinic._id,
-            clinicName: clinic.name,
-            clinicSlug: clinic.slug,
-            primaryColorHex: clinic.primaryColorHex,
-            waitlistId: entry._id,
-            patientName: `${patient.firstName} ${patient.lastName}`.trim(),
-            patientEmail: recipientEmail,
-            serviceName: service?.name ?? "Dental Procedure",
-            dateKey: args.dateKey,
-          }
-        );
-      }
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendWaitlistOpeningBlast,
+        {
+          clinicId: clinic._id,
+          clinicName: clinic.name,
+          clinicSlug: clinic.slug,
+          primaryColorHex: clinic.primaryColorHex,
+          waitlistId: entry._id,
+          patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+          patientEmail: recipientEmail,
+          serviceName: service?.name ?? "Dental Procedure",
+          dateKey: args.dateKey,
+        }
+      );
     }
 
     return { notified };

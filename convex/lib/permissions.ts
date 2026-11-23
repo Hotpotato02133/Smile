@@ -119,6 +119,51 @@ export async function requireClinicAccess(
 const GRACE_PERIOD_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
+ * Computes whether a clinic workspace is currently read-only, staying in exact parity
+ * with `assertClinicCanWrite` (Law #4) and Super Admin read-only impersonation.
+ */
+export function getClinicReadOnlyState(
+  clinic: Doc<"clinics">,
+  now: number,
+  isSuperAdminOverride = false
+): { isReadOnly: boolean; readOnlyReason: string | null } {
+  if (isSuperAdminOverride) {
+    return {
+      isReadOnly: true,
+      readOnlyReason: "Super Admin View-As-Clinic mode is strictly read-only.",
+    };
+  }
+  if (clinic.status === "suspended" || clinic.status === "archived") {
+    return {
+      isReadOnly: true,
+      readOnlyReason: `Clinic is ${clinic.status}. Schedule viewing is enabled while new writes are paused.`,
+    };
+  }
+  if (clinic.status === "trial" && now > clinic.subscriptionEndsAt) {
+    return {
+      isReadOnly: true,
+      readOnlyReason: "The free trial has ended. Upgrade the subscription to resume editing.",
+    };
+  }
+  if (clinic.status === "active" && now > clinic.subscriptionEndsAt) {
+    return {
+      isReadOnly: true,
+      readOnlyReason: "The subscription period has ended. Renew to resume editing.",
+    };
+  }
+  if (clinic.status === "past_due") {
+    const graceEnd = clinic.gracePeriodEndsAt ?? clinic.subscriptionEndsAt + GRACE_PERIOD_MS;
+    if (now > graceEnd) {
+      return {
+        isReadOnly: true,
+        readOnlyReason: "The 3-day grace period has expired. The clinic is now in read-only mode.",
+      };
+    }
+  }
+  return { isReadOnly: false, readOnlyReason: null };
+}
+
+/**
  * Law #4 + quota gates. Call before creating appointments, dentists, chairs,
  * uploads, emails or staff. Throws a structured ConvexError when blocked.
  */

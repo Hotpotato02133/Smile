@@ -71,6 +71,7 @@ type HeldSlot = {
 
 type BookingConfirmation = {
   appointmentId: Id<"appointments">;
+  status?: "pending_approval" | "confirmed";
   referenceCode: string;
   clinicName: string;
   clinicSlug: string;
@@ -425,7 +426,11 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
       setHeldSlot(null);
       setConfirmation(result);
       setStep(4);
-      toast.success(`Appointment confirmed (${result.referenceCode}).`);
+      toast.success(
+        result.status === "pending_approval"
+          ? `Booking request submitted (${result.referenceCode}) — awaiting front-desk approval.`
+          : `Appointment confirmed (${result.referenceCode}).`
+      );
     } catch (err) {
       toast.error(getErrorMessage(err, "Could not finalize booking."));
     } finally {
@@ -521,6 +526,11 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
                   <Clock className="size-3.5" />
                   {clinic.cancellationWindowHours}h cancellation notice
                 </span>
+                {clinic.requireBookingApproval ? (
+                  <span className="inline-flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400">
+                    · Requires clinic approval
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -1131,25 +1141,52 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
             />
           ) : null}
 
-          {/* STEP 4 — INSTANT CONFIRMATION & CALENDAR EXPORT */}
+          {/* STEP 4 — CONFIRMATION OR PENDING APPROVAL & CALENDAR EXPORT */}
           {step === 4 && confirmation ? (
-            <Card className="border-emerald-500/30">
+            <Card
+              className={
+                confirmation.status === "pending_approval"
+                  ? "border-amber-500/40"
+                  : "border-emerald-500/30"
+              }
+            >
               <CardHeader>
-                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
-                  <CheckCircle2 className="size-5" />
-                  <span className="text-sm font-semibold uppercase tracking-wide">
-                    Appointment Confirmed
-                  </span>
-                </div>
+                {confirmation.status === "pending_approval" ? (
+                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                    <Clock className="size-5" />
+                    <span className="text-sm font-semibold uppercase tracking-wide">
+                      Booking Request Pending Approval
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+                    <CheckCircle2 className="size-5" />
+                    <span className="text-sm font-semibold uppercase tracking-wide">
+                      Appointment Confirmed
+                    </span>
+                  </div>
+                )}
                 <CardTitle className="mt-1 text-2xl">
                   Booking Reference{" "}
                   <span className="font-mono">{confirmation.referenceCode}</span>
                 </CardTitle>
                 <CardDescription>
-                  We look forward to seeing{" "}
-                  <strong>{confirmation.patientName}</strong> at{" "}
-                  <strong>{confirmation.clinicName}</strong>. A confirmation
-                  email has been queued to your inbox.
+                  {confirmation.status === "pending_approval" ? (
+                    <>
+                      Your slot for <strong>{confirmation.patientName}</strong>{" "}
+                      at <strong>{confirmation.clinicName}</strong> is reserved
+                      pending front-desk approval. You will receive a
+                      confirmation email as soon as the clinic approves your
+                      request.
+                    </>
+                  ) : (
+                    <>
+                      We look forward to seeing{" "}
+                      <strong>{confirmation.patientName}</strong> at{" "}
+                      <strong>{confirmation.clinicName}</strong>. A confirmation
+                      email has been queued to your inbox.
+                    </>
+                  )}
                 </CardDescription>
               </CardHeader>
 
