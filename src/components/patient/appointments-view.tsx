@@ -1,22 +1,26 @@
 "use client";
 
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowUpRight,
-  Calendar,
+  Calendar as CalendarIcon,
+  CalendarClock,
   CalendarPlus,
   ClipboardList,
   Download,
   MapPin,
   Phone,
   Search,
+  Sparkles,
   Stethoscope,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "cn";
+import { Calendar } from "@/components/ui/calendar";
 import {
   Dialog,
   DialogContent,
@@ -26,8 +30,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { buildGoogleCalendarUrl, downloadIcsFile } from "@/lib/calendar-export";
-import { formatDateTime, formatPhp, getErrorMessage } from "@/lib/format";
+import {
+  dateKeyToLocalDate,
+  formatDateTime,
+  formatMinutes12h,
+  formatPhp,
+  getErrorMessage,
+  getTodayDateKeyInTimeZone,
+} from "@/lib/format";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 import {
   APPT_STATUS_META,
   type PatientAppointmentItem,
@@ -36,9 +48,281 @@ import {
 
 interface AppointmentsViewProps {
   data: PatientDashboardData;
+  nowMs: number;
+  onRefreshNow: () => void;
 }
 
-export function AppointmentsView({ data }: AppointmentsViewProps) {
+function dateToDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isWithinPolicyCutoff(appt: PatientAppointmentItem, nowMs: number): boolean {
+  const windowMs = (appt.cancellationWindowHours ?? 24) * 60 * 60 * 1000;
+  return appt.startTimeUtc - nowMs < windowMs;
+}
+
+function RescheduleDialogBody({
+  appt,
+  onClose,
+}: {
+  appt: PatientAppointmentItem;
+  onClose: () => void;
+}) {
+  const rescheduleAppointment = useMutation(
+    api.publicBooking.rescheduleMyAppointment
+  );
+  const clinicPortal = useQuery(
+    api.publicBooking.getPublicClinicBySlug,
+    appt.clinicSlug ? { slug: appt.clinicSlug } : "skip"
+  );
+
+  const [preferredDentistId, setPreferredDentistId] = useState<
+    Id<"dentists"> | "any"
+  >(appt.dentistId);
+  const [selectedDate, setSelectedDate] = useState<Date>(() => {
+    const parsed = dateKeyToLocalDate(appt.dateKey);
+    const todayKey = getTodayDateKeyInTimeZone(appt.clinicTimezone);
+    const todayDate = dateKeyToLocalDate(todayKey) ?? new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    if (parsed && parsed >= todayDate) return parsed;
+    return todayDate;
+  });
+  const [selectedSlot, setSelectedSlot] = useState<{
+    startTimeUtc: number;
+    endTimeUtc: number;
+    startMinute: number;
+    dentistId: Id<"dentists">;
+    dentistName: string;
+    chairId: Id<"chairs">;
+    chairName: string;
+  } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const dateKey = useMemo(() => dateToDateKey(selectedDate), [selectedDate]);
+
+  const availability = useQuery(api.availability.getAvailableSlots, {
+    clinicId: appt.clinicId,
+    serviceId: appt.serviceId,
+    dateKey,
+    preferredDentistId:
+      preferredDentistId === "any" ? undefined : preferredDentistId,
+    ignoreAppointmentId: appt._id,
+  });
+
+  const clinicTodayKey = getTodayDateKeyInTimeZone(appt.clinicTimezone);
+  const clinicTodayDate = dateKeyToLocalDate(clinicTodayKey) ?? new Date();
+  clinicTodayDate.setHours(0, 0, 0, 0);
+
+  const openDayNumbers = useMemo(() => {
+    if (!clinicPortal) return null;
+    return new Set(
+      clinicPortal.clinic.operatingHours
+        .filter((h) => h.isOpen)
+        .map((h) => h.dayOfWeek)
+    );
+  }, [clinicPortal]);
+
+  const selectedDentistDays = useMemo(() => {
+    if (!clinicPortal || preferredDentistId === "any") return null;
+    const match = clinicPortal.dentists.find((d) => d._id === preferredDentistId);
+    return match ? new Set(match.workingDays) : null;
+  }, [clinicPortal, preferredDentistId]);
+
+  const handleConfirmReschedule = async () => {
+    if (!selectedSlot) return;
+    setSubmitting(true);
+    try {
+      const res = await rescheduleAppointment({
+        appointmentId: appt._id,
+        dateKey,
+        startTimeUtc: selectedSlot.startTimeUtc,
+        dentistId: selectedSlot.dentistId,
+        chairId: selectedSlot.chairId,
+      });
+      toast.success(
+        `Appointment rescheduled to ${formatDateTime(res.startTimeUtc)} with ${res.dentistName}.`
+      );
+      onClose();
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not reschedule appointment."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4 py-1">
+      <div className="rounded-2xl bg-[#F7FAFD] px-4 py-3 text-xs text-slate-700">
+        <p className="font-semibold text-slate-950">
+          {appt.serviceName} · {appt.clinicName}
+        </p>
+        <p className="mt-0.5 text-slate-600">
+          Current visit: {formatDateTime(appt.startTimeUtc)} with{" "}
+          {appt.dentistName}
+        </p>
+      </div>
+
+      {/* Dentist Selector */}
+      {clinicPortal && clinicPortal.dentists.length > 0 ? (
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold text-slate-700">
+            Preferred Dentist
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setPreferredDentistId("any");
+                setSelectedSlot(null);
+              }}
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition-colors cursor-pointer",
+                preferredDentistId === "any"
+                  ? "bg-slate-950 text-white"
+                  : "border border-slate-200 bg-white text-slate-700 hover:bg-[#F5F7FA]"
+              )}
+            >
+              <Sparkles className="size-3" aria-hidden="true" />
+              <span>First Available</span>
+            </button>
+            {clinicPortal.dentists.map((d) => (
+              <button
+                key={d._id}
+                type="button"
+                onClick={() => {
+                  setPreferredDentistId(d._id);
+                  setSelectedSlot(null);
+                }}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition-colors cursor-pointer",
+                  preferredDentistId === d._id
+                    ? "bg-slate-950 text-white"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-[#F5F7FA]"
+                )}
+              >
+                <span
+                  className="size-2 rounded-full"
+                  style={{ backgroundColor: d.calendarColorHex }}
+                />
+                <span>{d.displayName}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Date Picker + Real-Time Slots */}
+      <div className="grid gap-4 md:grid-cols-[auto_1fr]">
+        <div className="flex justify-center rounded-2xl border border-slate-200/80 bg-white p-2">
+          <Calendar
+            mode="single"
+            selected={selectedDate}
+            onSelect={(d) => {
+              if (d) {
+                setSelectedDate(d);
+                setSelectedSlot(null);
+              }
+            }}
+            disabled={(date) =>
+              date < clinicTodayDate ||
+              (openDayNumbers !== null && !openDayNumbers.has(date.getDay())) ||
+              (selectedDentistDays !== null &&
+                !selectedDentistDays.has(date.getDay()))
+            }
+          />
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-700">
+            Open Slots for {dateKey}
+          </p>
+          {availability === undefined ? (
+            <div className="rounded-2xl border border-slate-200/80 p-6 text-center text-xs text-slate-500">
+              Checking real-time dentist &amp; chair availability…
+            </div>
+          ) : !availability.isBookable ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800">
+              {availability.blockedReason ??
+                "Online rescheduling is currently unavailable for this clinic."}
+            </div>
+          ) : availability.slots.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-500">
+              No open slots on {dateKey}. Try another date or switch to
+              &ldquo;First Available&rdquo;.
+            </div>
+          ) : (
+            <div className="grid max-h-64 grid-cols-2 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-3">
+              {availability.slots.map((slot) => {
+                const isSelected =
+                  selectedSlot?.startTimeUtc === slot.startTimeUtc;
+                const isSameAsCurrent =
+                  slot.startTimeUtc === appt.startTimeUtc &&
+                  slot.dentistId === appt.dentistId;
+                return (
+                  <button
+                    key={slot.startTimeUtc}
+                    type="button"
+                    disabled={isSameAsCurrent}
+                    onClick={() => setSelectedSlot(slot)}
+                    className={cn(
+                      "flex flex-col items-start rounded-xl border px-2.5 py-2 text-left transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed",
+                      isSelected
+                        ? "border-[#6C5CE7] bg-[#6C5CE7] text-white"
+                        : "border-slate-200 bg-white text-slate-900 hover:border-[#6C5CE7]/50 hover:bg-[#F5F3FF]"
+                    )}
+                  >
+                    <span className="font-mono text-xs font-bold">
+                      {formatMinutes12h(slot.startMinute)}
+                    </span>
+                    <span
+                      className={cn(
+                        "w-full truncate text-[10px]",
+                        isSelected ? "text-white/85" : "text-slate-500"
+                      )}
+                    >
+                      {isSameAsCurrent ? "Current slot" : slot.dentistName}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <DialogFooter className="gap-2 pt-2 sm:gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex h-10 items-center justify-center rounded-full bg-[#F5F7FA] px-4 text-sm font-semibold text-slate-800 hover:bg-[#EAF1F8] cursor-pointer"
+        >
+          Keep Current Time
+        </button>
+        <button
+          type="button"
+          disabled={!selectedSlot || submitting}
+          onClick={handleConfirmReschedule}
+          className="inline-flex h-10 items-center justify-center rounded-full bg-[#6C5CE7] px-5 text-sm font-semibold text-white hover:bg-[#5B4BD6] disabled:opacity-50 cursor-pointer"
+        >
+          {submitting
+            ? "Rescheduling…"
+            : selectedSlot
+              ? `Move to ${formatMinutes12h(selectedSlot.startMinute)}`
+              : "Select a New Time"}
+        </button>
+      </DialogFooter>
+    </div>
+  );
+}
+
+export function AppointmentsView({
+  data,
+  nowMs,
+  onRefreshNow,
+}: AppointmentsViewProps) {
   const cancelAppointment = useMutation(api.publicBooking.cancelMyAppointment);
 
   const [tab, setTab] = useState<"upcoming" | "history">("upcoming");
@@ -47,13 +331,18 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
   const [cancelTarget, setCancelTarget] = useState<PatientAppointmentItem | null>(
     null
   );
+  const [rescheduleTarget, setRescheduleTarget] =
+    useState<PatientAppointmentItem | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [submittingCancel, setSubmittingCancel] = useState(false);
 
   const uniquePeople = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of data.appointments) {
-      map.set(a.patientId, a.isDependent ? `${a.patientName} (Dependent)` : a.patientName);
+      map.set(
+        a.patientId,
+        a.isDependent ? `${a.patientName} (Dependent)` : a.patientName
+      );
     }
     return Array.from(map.entries());
   }, [data.appointments]);
@@ -63,12 +352,13 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
       data.appointments
         .filter(
           (a) =>
-            a.status !== "cancelled" &&
-            a.status !== "completed" &&
-            a.status !== "no_show"
+            a.status === "checked_in" ||
+            a.status === "in_chair" ||
+            ((a.status === "confirmed" || a.status === "pending_approval") &&
+              a.endTimeUtc >= nowMs)
         )
         .sort((a, b) => a.startTimeUtc - b.startTimeUtc),
-    [data.appointments]
+    [data.appointments, nowMs]
   );
 
   const history = useMemo(
@@ -78,10 +368,12 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
           (a) =>
             a.status === "cancelled" ||
             a.status === "completed" ||
-            a.status === "no_show"
+            a.status === "no_show" ||
+            ((a.status === "confirmed" || a.status === "pending_approval") &&
+              a.endTimeUtc < nowMs)
         )
         .sort((a, b) => b.startTimeUtc - a.startTimeUtc),
-    [data.appointments]
+    [data.appointments, nowMs]
   );
 
   const activeList = useMemo(() => {
@@ -108,11 +400,15 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
     if (!cancelTarget) return;
     setSubmittingCancel(true);
     try {
-      await cancelAppointment({
+      const res = await cancelAppointment({
         appointmentId: cancelTarget._id,
         reason: cancelReason.trim() || undefined,
       });
-      toast.success("Appointment cancelled. Waitlisted patients have been notified.");
+      toast.success(
+        res.waitlistEnabled
+          ? "Appointment cancelled. Matching waitlisted patients will be notified."
+          : "Appointment cancelled."
+      );
       setCancelTarget(null);
       setCancelReason("");
     } catch (err) {
@@ -121,6 +417,13 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
       setSubmittingCancel(false);
     }
   };
+
+  const cancelTargetBlocked = cancelTarget
+    ? isWithinPolicyCutoff(cancelTarget, nowMs)
+    : false;
+  const rescheduleTargetBlocked = rescheduleTarget
+    ? isWithinPolicyCutoff(rescheduleTarget, nowMs)
+    : false;
 
   return (
     <div className="flex flex-col gap-6">
@@ -131,8 +434,9 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
             Appointments
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Track live check-in status, export calendar invites, and review
-            post-visit aftercare notes across all Smile clinics.
+            Track live check-in status, reschedule or cancel online, export
+            calendar invites, and review post-visit aftercare notes across all
+            Smile clinics.
           </p>
         </div>
         <Link
@@ -264,10 +568,11 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
               endTimeUtc: appt.endTimeUtc,
               uid: `${appt._id}@smile-dental.app`,
             };
-            const canCancel =
+            const canModify =
               tab === "upcoming" &&
-              appt.status !== "in_chair" &&
-              appt.status !== "checked_in";
+              (appt.status === "confirmed" ||
+                appt.status === "pending_approval");
+            const withinCutoff = canModify && isWithinPolicyCutoff(appt, nowMs);
 
             return (
               <article
@@ -283,7 +588,9 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                           meta.badgeClass
                         )}
                       >
-                        <span className={cn("size-1.5 rounded-full", meta.dotClass)} />
+                        <span
+                          className={cn("size-1.5 rounded-full", meta.dotClass)}
+                        />
                         {meta.label}
                       </span>
                       <span className="rounded-full bg-[#F5F7FA] px-2.5 py-0.5 font-mono text-xs font-medium text-slate-700">
@@ -306,11 +613,17 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
 
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-slate-600">
                       <span className="inline-flex items-center gap-1.5 font-medium text-slate-900">
-                        <Calendar className="size-3.5 text-[#6C5CE7]" aria-hidden="true" />
+                        <CalendarIcon
+                          className="size-3.5 text-[#6C5CE7]"
+                          aria-hidden="true"
+                        />
                         {formatDateTime(appt.startTimeUtc)} ({appt.durationMinutes}m)
                       </span>
                       <span className="inline-flex items-center gap-1.5">
-                        <Stethoscope className="size-3.5 text-[#6C5CE7]" aria-hidden="true" />
+                        <Stethoscope
+                          className="size-3.5 text-[#6C5CE7]"
+                          aria-hidden="true"
+                        />
                         {appt.dentistName} ({appt.chairName})
                       </span>
                     </div>
@@ -321,10 +634,13 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                         {appt.clinicAddress}
                       </span>
                       {appt.clinicPhone ? (
-                        <span className="inline-flex items-center gap-1">
+                        <a
+                          href={`tel:${appt.clinicPhone.replace(/[^\d+]/g, "")}`}
+                          className="inline-flex items-center gap-1 hover:text-slate-900"
+                        >
                           <Phone className="size-3.5" aria-hidden="true" />
                           {appt.clinicPhone}
-                        </span>
+                        </a>
                       ) : null}
                     </div>
                   </div>
@@ -334,13 +650,39 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                       {formatPhp(appt.pricePhp)}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {appt.cancellationWindowHours}h cancel policy
+                      {appt.cancellationWindowHours}h cancel/reschedule policy
                     </p>
                   </div>
                 </div>
 
+                {/* Late-window banner when inside clinic cutoff */}
+                {withinCutoff ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200/90 bg-amber-50/80 px-3.5 py-2.5 text-xs text-amber-950">
+                    <span className="inline-flex items-center gap-1.5">
+                      <AlertTriangle
+                        className="size-3.5 shrink-0 text-amber-700"
+                        aria-hidden="true"
+                      />
+                      Within {appt.cancellationWindowHours} hours of your visit —
+                      online changes are locked. Please call{" "}
+                      <strong>{appt.clinicName}</strong> to reschedule or cancel.
+                    </span>
+                    {appt.clinicPhone ? (
+                      <a
+                        href={`tel:${appt.clinicPhone.replace(/[^\d+]/g, "")}`}
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-900 px-3 py-1 font-semibold text-white hover:bg-amber-800"
+                      >
+                        <Phone className="size-3" aria-hidden="true" />
+                        <span>{appt.clinicPhone}</span>
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {/* Chief Complaint or Post-Visit Care Instructions */}
-                {appt.chiefComplaint || appt.postVisitInstructions || appt.cancellationReason ? (
+                {appt.chiefComplaint ||
+                appt.postVisitInstructions ||
+                appt.cancellationReason ? (
                   <div className="mt-4 space-y-2">
                     {appt.chiefComplaint ? (
                       <div className="rounded-xl bg-[#F7FAFD] px-3.5 py-2.5 text-xs text-slate-700">
@@ -353,7 +695,10 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                     {appt.postVisitInstructions ? (
                       <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/70 px-3.5 py-3 text-xs text-emerald-950">
                         <p className="flex items-center gap-1.5 font-semibold text-emerald-900">
-                          <ClipboardList className="size-3.5" aria-hidden="true" />
+                          <ClipboardList
+                            className="size-3.5"
+                            aria-hidden="true"
+                          />
                           Dentist Post-Visit Aftercare Instructions
                         </p>
                         <p className="mt-1 leading-relaxed">
@@ -380,7 +725,10 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                           rel="noreferrer"
                           className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[#F5F7FA] px-3.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-[#EAF1F8]"
                         >
-                          <CalendarPlus className="size-3.5 text-[#6C5CE7]" aria-hidden="true" />
+                          <CalendarPlus
+                            className="size-3.5 text-[#6C5CE7]"
+                            aria-hidden="true"
+                          />
                           <span>Google Calendar</span>
                         </a>
                         <button
@@ -390,7 +738,10 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                           }
                           className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[#F5F7FA] px-3.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-[#EAF1F8] cursor-pointer"
                         >
-                          <Download className="size-3.5 text-[#6C5CE7]" aria-hidden="true" />
+                          <Download
+                            className="size-3.5 text-[#6C5CE7]"
+                            aria-hidden="true"
+                          />
                           <span>.ICS</span>
                         </button>
                       </>
@@ -407,18 +758,32 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
                     ) : null}
                   </div>
 
-                  {canCancel ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCancelTarget(appt);
-                        setCancelReason("");
-                      }}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-50 cursor-pointer"
-                    >
-                      <XCircle className="size-3.5" aria-hidden="true" />
-                      <span>Cancel Visit</span>
-                    </button>
+                  {canModify ? (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onRefreshNow();
+                          setRescheduleTarget(appt);
+                        }}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 transition-colors hover:border-[#6C5CE7]/40 hover:bg-[#F5F3FF] hover:text-[#4F3EC7] cursor-pointer"
+                      >
+                        <CalendarClock className="size-3.5" aria-hidden="true" />
+                        <span>Reschedule</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onRefreshNow();
+                          setCancelTarget(appt);
+                          setCancelReason("");
+                        }}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-50 cursor-pointer"
+                      >
+                        <XCircle className="size-3.5" aria-hidden="true" />
+                        <span>Cancel Visit</span>
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               </article>
@@ -426,6 +791,87 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
           })}
         </div>
       )}
+
+      {/* Reschedule Appointment Dialog */}
+      <Dialog
+        open={rescheduleTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRescheduleTarget(null);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl rounded-[24px]">
+          <DialogHeader>
+            <DialogTitle className="font-heading text-lg font-bold">
+              {rescheduleTargetBlocked
+                ? "Online Rescheduling Unavailable"
+                : "Reschedule Dental Appointment"}
+            </DialogTitle>
+            <DialogDescription>
+              {rescheduleTarget ? (
+                rescheduleTargetBlocked ? (
+                  <>
+                    Online rescheduling requires at least{" "}
+                    <strong>
+                      {rescheduleTarget.cancellationWindowHours} hours
+                    </strong>{" "}
+                    notice before your appointment.
+                  </>
+                ) : (
+                  <>
+                    Pick a new date and open dentist/chair slot for{" "}
+                    <strong>{rescheduleTarget.referenceCode}</strong>.
+                  </>
+                )
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+
+          {rescheduleTarget ? (
+            rescheduleTargetBlocked ? (
+              <div className="space-y-4 py-2">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                  <p className="font-semibold">
+                    Please call {rescheduleTarget.clinicName} directly
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                    Your visit is scheduled for{" "}
+                    <strong>
+                      {formatDateTime(rescheduleTarget.startTimeUtc)}
+                    </strong>
+                    , which is inside the clinic&apos;s{" "}
+                    {rescheduleTarget.cancellationWindowHours}-hour change
+                    window. Contact the front desk so they can assist you.
+                  </p>
+                </div>
+                <DialogFooter className="gap-2 sm:gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRescheduleTarget(null)}
+                    className="inline-flex h-10 items-center justify-center rounded-full bg-[#F5F7FA] px-4 text-sm font-semibold text-slate-800 hover:bg-[#EAF1F8] cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  {rescheduleTarget.clinicPhone ? (
+                    <a
+                      href={`tel:${rescheduleTarget.clinicPhone.replace(/[^\d+]/g, "")}`}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full bg-[#6C5CE7] px-5 text-sm font-semibold text-white hover:bg-[#5B4BD6]"
+                    >
+                      <Phone className="size-4" aria-hidden="true" />
+                      <span>Call {rescheduleTarget.clinicPhone}</span>
+                    </a>
+                  ) : null}
+                </DialogFooter>
+              </div>
+            ) : (
+              <RescheduleDialogBody
+                key={rescheduleTarget._id}
+                appt={rescheduleTarget}
+                onClose={() => setRescheduleTarget(null)}
+              />
+            )
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       {/* Cancel Appointment Dialog */}
       <Dialog
@@ -437,56 +883,104 @@ export function AppointmentsView({ data }: AppointmentsViewProps) {
         <DialogContent className="sm:max-w-md rounded-[24px]">
           <DialogHeader>
             <DialogTitle className="font-heading text-lg font-bold">
-              Cancel dental appointment?
+              {cancelTargetBlocked
+                ? "Online Cancellation Blocked"
+                : "Cancel dental appointment?"}
             </DialogTitle>
             <DialogDescription>
               {cancelTarget ? (
-                <>
-                  Cancelling{" "}
-                  <strong>
-                    {cancelTarget.serviceName} ({cancelTarget.referenceCode})
-                  </strong>{" "}
-                  at {cancelTarget.clinicName}. Online cancellation requires at
-                  least {cancelTarget.cancellationWindowHours} hours notice.
-                </>
+                cancelTargetBlocked ? (
+                  <>
+                    This visit at <strong>{cancelTarget.clinicName}</strong> is
+                    within the clinic&apos;s{" "}
+                    <strong>{cancelTarget.cancellationWindowHours}-hour</strong>{" "}
+                    cancellation window.
+                  </>
+                ) : (
+                  <>
+                    Cancelling{" "}
+                    <strong>
+                      {cancelTarget.serviceName} ({cancelTarget.referenceCode})
+                    </strong>{" "}
+                    at {cancelTarget.clinicName}. Online cancellation requires
+                    at least {cancelTarget.cancellationWindowHours} hours notice.
+                  </>
+                )
               ) : null}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2 py-2">
-            <label
-              htmlFor="cancel-reason"
-              className="text-xs font-semibold text-slate-700"
-            >
-              Reason for cancellation (optional)
-            </label>
-            <input
-              id="cancel-reason"
-              type="text"
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value)}
-              placeholder="e.g., Schedule conflict, feeling unwell…"
-              className="h-10 w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 text-sm text-slate-900 focus:border-[#6C5CE7] focus:bg-white focus:outline-none"
-            />
-          </div>
+          {cancelTarget && cancelTargetBlocked ? (
+            <div className="space-y-4 py-2">
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                <p className="font-semibold">
+                  Please call {cancelTarget.clinicName} directly
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                  Because your appointment starts on{" "}
+                  <strong>{formatDateTime(cancelTarget.startTimeUtc)}</strong>,
+                  late cancellations must be handled directly with the front
+                  desk so they can adjust the chair schedule.
+                </p>
+              </div>
 
-          <DialogFooter className="gap-2 sm:gap-2">
-            <button
-              type="button"
-              onClick={() => setCancelTarget(null)}
-              className="inline-flex h-10 items-center justify-center rounded-full bg-[#F5F7FA] px-4 text-sm font-semibold text-slate-800 hover:bg-[#EAF1F8] cursor-pointer"
-            >
-              Keep Appointment
-            </button>
-            <button
-              type="button"
-              disabled={submittingCancel}
-              onClick={handleConfirmCancel}
-              className="inline-flex h-10 items-center justify-center rounded-full bg-rose-600 px-5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
-            >
-              {submittingCancel ? "Cancelling…" : "Confirm Cancellation"}
-            </button>
-          </DialogFooter>
+              <DialogFooter className="gap-2 sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCancelTarget(null)}
+                  className="inline-flex h-10 items-center justify-center rounded-full bg-[#F5F7FA] px-4 text-sm font-semibold text-slate-800 hover:bg-[#EAF1F8] cursor-pointer"
+                >
+                  Close
+                </button>
+                {cancelTarget.clinicPhone ? (
+                  <a
+                    href={`tel:${cancelTarget.clinicPhone.replace(/[^\d+]/g, "")}`}
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-[#6C5CE7]"
+                  >
+                    <Phone className="size-4" aria-hidden="true" />
+                    <span>Call {cancelTarget.clinicPhone}</span>
+                  </a>
+                ) : null}
+              </DialogFooter>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2 py-2">
+                <label
+                  htmlFor="cancel-reason"
+                  className="text-xs font-semibold text-slate-700"
+                >
+                  Reason for cancellation (optional)
+                </label>
+                <input
+                  id="cancel-reason"
+                  type="text"
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="e.g., Schedule conflict, feeling unwell…"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 text-sm text-slate-900 focus:border-[#6C5CE7] focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              <DialogFooter className="gap-2 sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCancelTarget(null)}
+                  className="inline-flex h-10 items-center justify-center rounded-full bg-[#F5F7FA] px-4 text-sm font-semibold text-slate-800 hover:bg-[#EAF1F8] cursor-pointer"
+                >
+                  Keep Appointment
+                </button>
+                <button
+                  type="button"
+                  disabled={submittingCancel}
+                  onClick={handleConfirmCancel}
+                  className="inline-flex h-10 items-center justify-center rounded-full bg-rose-600 px-5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
+                >
+                  {submittingCancel ? "Cancelling…" : "Confirm Cancellation"}
+                </button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

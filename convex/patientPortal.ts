@@ -99,26 +99,21 @@ export const getDashboardData = query({
     const referenceNow = args.nowMs ?? 0;
 
     // Fetch active announcements targeted to all_users + bookable public clinics for quick booking
-    const [rawAnnouncements, activeClinics, trialClinics, pastDueClinics] =
-      await Promise.all([
-        ctx.db
-          .query("systemAnnouncements")
-          .withIndex("by_active", (q) => q.eq("isActive", true))
-          .order("desc")
-          .take(10),
-        ctx.db
-          .query("clinics")
-          .withIndex("by_status", (q) => q.eq("status", "active"))
-          .take(24),
-        ctx.db
-          .query("clinics")
-          .withIndex("by_status", (q) => q.eq("status", "trial"))
-          .take(12),
-        ctx.db
-          .query("clinics")
-          .withIndex("by_status", (q) => q.eq("status", "past_due"))
-          .take(12),
-      ]);
+    const [rawAnnouncements, activeClinics, trialClinics] = await Promise.all([
+      ctx.db
+        .query("systemAnnouncements")
+        .withIndex("by_active", (q) => q.eq("isActive", true))
+        .order("desc")
+        .take(10),
+      ctx.db
+        .query("clinics")
+        .withIndex("by_status", (q) => q.eq("status", "active"))
+        .take(50),
+      ctx.db
+        .query("clinics")
+        .withIndex("by_status", (q) => q.eq("status", "trial"))
+        .take(50),
+    ]);
 
     const announcements = rawAnnouncements
       .filter(
@@ -135,13 +130,13 @@ export const getDashboardData = query({
         createdAt: a.createdAt,
       }));
 
-    const bookableClinics = [...activeClinics, ...trialClinics, ...pastDueClinics]
+    const bookableClinics = [...activeClinics, ...trialClinics]
       .filter((c) =>
         referenceNow > 0
           ? getClinicBookingEligibility(c, referenceNow).isBookable
-          : c.status === "active" || c.status === "trial" || c.status === "past_due"
+          : c.status === "active" || c.status === "trial"
       )
-      .slice(0, 12)
+      .slice(0, 50)
       .map((c) => ({
         _id: c._id,
         name: c.name,
@@ -238,52 +233,56 @@ export const getDashboardData = query({
       chairs.filter((c): c is Doc<"chairs"> => c !== null).map((c) => [c._id, c])
     );
 
-    // Fetch waitlist entries across clinics the patient belongs to
-    const ownedPatientIds = new Set(allPatients.map((p) => p._id));
-    const waitlistResults: Array<{
-      _id: Id<"waitlist">;
-      clinicId: Id<"clinics">;
-      clinicName: string;
-      clinicSlug: string;
-      patientId: Id<"patients">;
-      patientName: string;
-      serviceName: string;
-      preferredDateKey: string;
-      preferredTimeWindow: "morning" | "afternoon" | "any";
-      status: "waiting" | "notified" | "claimed" | "expired";
-      createdAt: number;
-    }> = [];
+    // Fetch waitlist entries directly per owned patient via `by_patient` index
+    const waitlistGroups = await Promise.all(
+      allPatients.map((p) =>
+        ctx.db
+          .query("waitlist")
+          .withIndex("by_patient", (q) => q.eq("patientId", p._id))
+          .order("desc")
+          .take(25)
+      )
+    );
+    const rawWaitlistRows = waitlistGroups.flat();
 
-    for (const clinicId of clinicIds) {
-      const clinic = clinicMap.get(clinicId);
-      if (!clinic) continue;
-      const rows = await ctx.db
-        .query("waitlist")
-        .withIndex("by_clinic_and_date", (q) => q.eq("clinicId", clinicId))
-        .take(100);
-      for (const row of rows) {
-        if (!ownedPatientIds.has(row.patientId)) continue;
-        const service =
-          serviceMap.get(row.serviceId) ?? (await ctx.db.get(row.serviceId));
+    const extraServiceIds = Array.from(
+      new Set(
+        rawWaitlistRows
+          .map((w) => w.serviceId)
+          .filter((id) => !serviceMap.has(id))
+      )
+    );
+    const extraServices = await Promise.all(
+      extraServiceIds.map((id) => ctx.db.get(id))
+    );
+    for (const svc of extraServices) {
+      if (svc) serviceMap.set(svc._id, svc);
+    }
+
+    const waitlistResults = rawWaitlistRows
+      .map((row) => {
+        const clinic = clinicMap.get(row.clinicId);
+        const service = serviceMap.get(row.serviceId);
         const patient = patientMap.get(row.patientId);
-        waitlistResults.push({
+        return {
           _id: row._id,
           clinicId: row.clinicId,
-          clinicName: clinic.name,
-          clinicSlug: clinic.slug,
+          clinicName: clinic?.name ?? "Dental Clinic",
+          clinicSlug: clinic?.slug ?? "",
           patientId: row.patientId,
           patientName: patient
             ? `${patient.firstName} ${patient.lastName}`
             : "Patient",
+          serviceId: row.serviceId,
           serviceName: service?.name ?? "Dental Procedure",
+          preferredDentistId: row.preferredDentistId ?? null,
           preferredDateKey: row.preferredDateKey,
           preferredTimeWindow: row.preferredTimeWindow,
           status: row.status,
           createdAt: row.createdAt,
-        });
-      }
-    }
-    waitlistResults.sort((a, b) => b.createdAt - a.createdAt);
+        };
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
 
     return {
       user: {
@@ -354,16 +353,20 @@ export const getDashboardData = query({
           clinicName: clinic?.name ?? "Dental Clinic",
           clinicSlug: clinic?.slug ?? "",
           clinicColorHex: clinic?.primaryColorHex ?? "#6C5CE7",
+          clinicTimezone: clinic?.timezone ?? "Asia/Manila",
           clinicAddress: clinic
             ? `${clinic.address}, ${clinic.city}, ${clinic.province}`
             : "",
           clinicPhone: clinic?.phone ?? "",
           cancellationWindowHours: clinic?.cancellationWindowHours ?? 24,
+          serviceId: appt.serviceId,
           serviceName: service?.name ?? "Dental Procedure",
           serviceCategory: service?.category ?? "Preventive",
           durationMinutes: service?.durationMinutes ?? 30,
           pricePhp: service?.pricePhp ?? 0,
+          dentistId: appt.dentistId,
           dentistName: dentist?.displayName ?? "Assigned Dentist",
+          chairId: appt.chairId,
           chairName: chair?.name ?? "Operatory Chair",
         };
       }),
@@ -671,5 +674,60 @@ export const leaveWaitlist = mutation({
 
     await ctx.db.patch(entry._id, { status: "expired" });
     return { withdrawn: true };
+  },
+});
+
+/**
+ * Allows a guardian to delete a linked dependent sub-profile if it has no
+ * appointments, odontogram entries, or clinical files recorded yet.
+ */
+export const deleteDependentProfile = mutation({
+  args: {
+    patientId: v.id("patients"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getAuthenticatedUser(ctx);
+    const patient = await assertPatientOwnership(ctx, args.patientId, user._id);
+
+    if (!patient.guardianPatientId) {
+      throw new ConvexError({
+        code: "INVALID_STATE",
+        message: "Only linked family dependent profiles can be removed here.",
+      });
+    }
+
+    const [hasAppointment, hasToothRecord, hasFile] = await Promise.all([
+      ctx.db
+        .query("appointments")
+        .withIndex("by_patient", (q) => q.eq("patientId", patient._id))
+        .first(),
+      ctx.db
+        .query("toothRecords")
+        .withIndex("by_patient_and_tooth", (q) => q.eq("patientId", patient._id))
+        .first(),
+      ctx.db
+        .query("clinicalFiles")
+        .withIndex("by_patient", (q) => q.eq("patientId", patient._id))
+        .first(),
+    ]);
+
+    if (hasAppointment || hasToothRecord || hasFile) {
+      throw new ConvexError({
+        code: "HAS_CLINICAL_RECORDS",
+        message:
+          "This dependent has existing appointments or clinical records and cannot be deleted for medical record compliance.",
+      });
+    }
+
+    const dependentWaitlist = await ctx.db
+      .query("waitlist")
+      .withIndex("by_patient", (q) => q.eq("patientId", patient._id))
+      .take(50);
+    for (const w of dependentWaitlist) {
+      await ctx.db.delete(w._id);
+    }
+
+    await ctx.db.delete(patient._id);
+    return { deleted: true };
   },
 });

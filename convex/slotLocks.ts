@@ -80,6 +80,8 @@ export const acquireLock = mutation({
         chairId: chosenChairId,
         startTimeUtc: args.startTimeUtc,
         ignoreSessionId: sessionId,
+        enforceScheduleRules: true,
+        minLeadMinutes: 15,
       });
       if (!check.ok) {
         // Fallback: see if another eligible dentist/chair pair is free at this exact time
@@ -166,6 +168,7 @@ export const acquireLock = mutation({
       endTimeUtc,
       bufferEndTimeUtc,
       expiresAtUtc,
+      serverNowUtc: now,
     };
   },
 });

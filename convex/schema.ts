@@ -493,7 +493,10 @@ export default defineSchema({
       v.literal("expired")
     ),
     createdAt: v.number(),
-  }).index("by_clinic_and_date", ["clinicId", "preferredDateKey", "status"]),
+  })
+    .index("by_clinic_and_date", ["clinicId", "preferredDateKey", "status"])
+    .index("by_patient", ["patientId", "createdAt"])
+    .index("by_status_and_date", ["status", "preferredDateKey"]),
 
   clinicMetricsDaily: defineTable({
     clinicId: v.id("clinics"),

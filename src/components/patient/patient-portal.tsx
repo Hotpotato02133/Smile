@@ -52,13 +52,21 @@ function ConnectedPatientPortal() {
   const [activeTab, setActiveTab] = useState<PatientNavTab>("overview");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [familyCreateOpen, setFamilyCreateOpen] = useState(false);
+  const [nowMs, setNowMs] = useState<number>(0);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setNowMs(Math.floor(Date.now() / 60_000) * 60_000);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, []);
 
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
 
   const data = useQuery(
     api.patientPortal.getDashboardData,
-    isAuthenticated ? {} : "skip"
+    isAuthenticated && nowMs > 0 ? { nowMs } : "skip"
   );
 
   useEffect(() => {
@@ -69,9 +77,10 @@ function ConnectedPatientPortal() {
 
   const upcomingCount = (data?.appointments ?? []).filter(
     (a) =>
-      a.status !== "cancelled" &&
-      a.status !== "completed" &&
-      a.status !== "no_show"
+      a.status === "checked_in" ||
+      a.status === "in_chair" ||
+      ((a.status === "confirmed" || a.status === "pending_approval") &&
+        a.endTimeUtc >= nowMs)
   ).length;
 
   const notifiedWaitlistCount = (data?.waitlist ?? []).filter(
@@ -377,11 +386,16 @@ function ConnectedPatientPortal() {
             ) : activeTab === "overview" ? (
               <OverviewView
                 data={data}
+                nowMs={nowMs}
                 onNavigate={setActiveTab}
                 onQuickAddFamily={handleQuickAddFamily}
               />
             ) : activeTab === "appointments" ? (
-              <AppointmentsView data={data} />
+              <AppointmentsView
+                data={data}
+                nowMs={nowMs}
+                onRefreshNow={() => setNowMs(Date.now())}
+              />
             ) : activeTab === "family" ? (
               <FamilyHealthView
                 data={data}

@@ -35,15 +35,29 @@ type QuotaReservationResult = {
     | null;
 };
 
-function formatManilaDateTime(timestampMs: number): string {
-  return new Intl.DateTimeFormat("en-PH", {
-    timeZone: "Asia/Manila",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(timestampMs));
+function formatClinicDateTime(
+  timestampMs: number,
+  timeZone = "Asia/Manila"
+): string {
+  try {
+    return new Intl.DateTimeFormat("en-PH", {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(timestampMs));
+  } catch {
+    return new Intl.DateTimeFormat("en-PH", {
+      timeZone: "Asia/Manila",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(timestampMs));
+  }
 }
 
 function getAppBaseUrl(): string {
@@ -201,7 +215,10 @@ export const sendBookingConfirmation = internalAction({
       serviceName: data.service.name,
       dentistName: data.dentist.displayName,
       chairName: data.chair.name,
-      formattedDateTime: formatManilaDateTime(data.appt.startTimeUtc),
+      formattedDateTime: formatClinicDateTime(
+        data.appt.startTimeUtc,
+        data.clinic.timezone
+      ),
       referenceCode: `SML-${data.appt._id.slice(-6).toUpperCase()}`,
     });
 
@@ -234,7 +251,10 @@ export const sendAppointmentReminder24h = internalAction({
       patientName: `${data.patient.firstName} ${data.patient.lastName}`,
       serviceName: data.service.name,
       dentistName: data.dentist.displayName,
-      formattedDateTime: formatManilaDateTime(data.appt.startTimeUtc),
+      formattedDateTime: formatClinicDateTime(
+        data.appt.startTimeUtc,
+        data.clinic.timezone
+      ),
     });
 
     return await ctx.runAction(internal.notifications.sendClinicEmail, {
@@ -324,9 +344,9 @@ export const sendSubscriptionStatusAlert = internalAction({
     const template = subscriptionExpiryAlertEmail({
       clinicName: args.clinicName,
       newStatus: args.newStatus,
-      subscriptionEndsAtFormatted: formatManilaDateTime(args.subscriptionEndsAt),
+      subscriptionEndsAtFormatted: formatClinicDateTime(args.subscriptionEndsAt),
       graceEndsAtFormatted: args.gracePeriodEndsAt
-        ? formatManilaDateTime(args.gracePeriodEndsAt)
+        ? formatClinicDateTime(args.gracePeriodEndsAt)
         : undefined,
     });
 
@@ -413,7 +433,7 @@ export const sendRoleInvitationEmail = internalAction({
       accentHex: clinic?.primaryColorHex ?? "#6C5CE7",
       inviterName,
       inviterNote: invitation.inviterNote,
-      expiresFormatted: formatManilaDateTime(invitation.expiresAt),
+      expiresFormatted: formatClinicDateTime(invitation.expiresAt),
       acceptUrl,
       declineUrl,
     });

@@ -36,6 +36,7 @@ import {
 
 interface OverviewViewProps {
   data: PatientDashboardData;
+  nowMs: number;
   onNavigate: (tab: PatientNavTab) => void;
   onQuickAddFamily: () => void;
 }
@@ -58,6 +59,7 @@ function getFlowStepIndex(status: string): number {
 
 export function OverviewView({
   data,
+  nowMs,
   onNavigate,
   onQuickAddFamily,
 }: OverviewViewProps) {
@@ -68,12 +70,13 @@ export function OverviewView({
       data.appointments
         .filter(
           (a) =>
-            a.status !== "cancelled" &&
-            a.status !== "completed" &&
-            a.status !== "no_show"
+            a.status === "checked_in" ||
+            a.status === "in_chair" ||
+            ((a.status === "confirmed" || a.status === "pending_approval") &&
+              a.endTimeUtc >= nowMs)
         )
         .sort((a, b) => a.startTimeUtc - b.startTimeUtc),
-    [data.appointments]
+    [data.appointments, nowMs]
   );
 
   const nextVisit = upcoming[0] ?? null;
@@ -171,7 +174,7 @@ export function OverviewView({
             </div>
           </div>
           <Link
-            href={`/c/${notifiedWaitlist[0].clinicSlug}`}
+            href={`/c/${notifiedWaitlist[0].clinicSlug}?waitlistId=${notifiedWaitlist[0]._id}&date=${encodeURIComponent(notifiedWaitlist[0].preferredDateKey)}`}
             className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#5B4BD6]"
           >
             <span>Claim Slot Now</span>

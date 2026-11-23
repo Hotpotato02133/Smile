@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import {
   computeAvailableSlots,
@@ -16,6 +17,7 @@ export const getAvailableSlots = query({
     dateKey: v.string(),
     preferredDentistId: v.optional(v.id("dentists")),
     sessionId: v.optional(v.string()),
+    ignoreAppointmentId: v.optional(v.id("appointments")),
   },
   handler: async (ctx, args) => {
     const [clinic, service] = await Promise.all([
@@ -40,12 +42,43 @@ export const getAvailableSlots = query({
       };
     }
 
+    // Only ignore an appointment when the caller is authenticated and owns it (or is staff of this clinic)
+    let verifiedIgnoreAppointmentId: Id<"appointments"> | undefined;
+    if (args.ignoreAppointmentId) {
+      const identity = await ctx.auth.getUserIdentity();
+      if (identity) {
+        const user = await ctx.db
+          .query("users")
+          .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+          .unique();
+        const appt = await ctx.db.get(args.ignoreAppointmentId);
+        if (user && user.isActive && appt && appt.clinicId === clinic._id) {
+          if (user.clinicId === clinic._id && user.role !== "patient") {
+            verifiedIgnoreAppointmentId = appt._id;
+          } else {
+            const patient = await ctx.db.get(appt.patientId);
+            if (patient) {
+              let owns = patient.userId === user._id;
+              if (!owns && patient.guardianPatientId) {
+                const guardian = await ctx.db.get(patient.guardianPatientId);
+                owns = guardian?.userId === user._id;
+              }
+              if (owns) {
+                verifiedIgnoreAppointmentId = appt._id;
+              }
+            }
+          }
+        }
+      }
+    }
+
     const slots = await computeAvailableSlots(ctx, {
       clinic,
       service,
       dateKey: args.dateKey,
       preferredDentistId: args.preferredDentistId,
       ignoreSessionId: args.sessionId,
+      ignoreAppointmentId: verifiedIgnoreAppointmentId,
     });
 
     return {

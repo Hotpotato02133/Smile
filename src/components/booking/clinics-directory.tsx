@@ -83,12 +83,22 @@ function ConnectedDirectory() {
             <Card key={clinic._id} className="flex flex-col">
               <CardHeader>
                 <div className="flex items-center gap-2.5">
-                  <span
-                    className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white"
-                    style={{ backgroundColor: clinic.primaryColorHex }}
-                  >
-                    {clinic.name.slice(0, 1).toUpperCase()}
-                  </span>
+                  {clinic.logoUrl ? (
+                    // Dynamic signed Convex storage URL
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={clinic.logoUrl}
+                      alt={`${clinic.name} logo`}
+                      className="size-9 shrink-0 rounded-lg border object-cover"
+                    />
+                  ) : (
+                    <span
+                      className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white"
+                      style={{ backgroundColor: clinic.primaryColorHex }}
+                    >
+                      {clinic.name.slice(0, 1).toUpperCase()}
+                    </span>
+                  )}
                   <div className="min-w-0">
                     <CardTitle className="truncate text-base">
                       {clinic.name}

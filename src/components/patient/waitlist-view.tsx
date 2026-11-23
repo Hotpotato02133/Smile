@@ -150,7 +150,7 @@ export function WaitlistView({ data }: WaitlistViewProps) {
                 <div className="flex flex-wrap items-center gap-2">
                   {isNotified ? (
                     <Link
-                      href={`/c/${entry.clinicSlug}`}
+                      href={`/c/${entry.clinicSlug}?waitlistId=${entry._id}&date=${encodeURIComponent(entry.preferredDateKey)}`}
                       className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#5B4BD6]"
                     >
                       <span>Claim Open Slot</span>

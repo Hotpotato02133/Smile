@@ -50,22 +50,18 @@ export const listPublicClinics = query({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const [activeClinics, trialClinics, pastDueClinics] = await Promise.all([
+    const [activeClinics, trialClinics] = await Promise.all([
       ctx.db
         .query("clinics")
         .withIndex("by_status", (q) => q.eq("status", "active"))
-        .collect(),
+        .take(100),
       ctx.db
         .query("clinics")
         .withIndex("by_status", (q) => q.eq("status", "trial"))
-        .collect(),
-      ctx.db
-        .query("clinics")
-        .withIndex("by_status", (q) => q.eq("status", "past_due"))
-        .collect(),
+        .take(100),
     ]);
 
-    const visible = [...activeClinics, ...trialClinics, ...pastDueClinics].filter(
+    const visible = [...activeClinics, ...trialClinics].filter(
       (c) => getClinicBookingEligibility(c, now).isBookable
     );
 
@@ -146,6 +142,7 @@ export const getPublicClinicBySlug = query({
         slotIntervalMinutes: clinic.slotIntervalMinutes,
         cancellationWindowHours: clinic.cancellationWindowHours,
         operatingHours: clinic.operatingHours,
+        waitlistAutomationEnabled: clinic.featureFlags.waitlistAutomationEnabled,
         isBookable: eligibility.isBookable,
         blockedReason: eligibility.reason,
       },
@@ -282,6 +279,8 @@ export const createOnlineBooking = mutation({
       chairId: args.chairId,
       startTimeUtc: args.startTimeUtc,
       ignoreSessionId: args.sessionId,
+      enforceScheduleRules: true,
+      minLeadMinutes: 0,
     });
     if (!availabilityCheck.ok) {
       throw new ConvexError({
@@ -419,7 +418,11 @@ export const createOnlineBooking = mutation({
     // Release temporary lock(s) atomically inside the same transaction
     if (args.lockId) {
       const lock = await ctx.db.get(args.lockId);
-      if (lock && lock.clinicId === args.clinicId) {
+      if (
+        lock &&
+        lock.clinicId === args.clinicId &&
+        lock.lockedBySessionId === args.sessionId
+      ) {
         await ctx.db.delete(lock._id);
       }
     }
@@ -617,7 +620,9 @@ export const cancelMyAppointment = mutation({
     if (
       appt.status === "cancelled" ||
       appt.status === "completed" ||
-      appt.status === "in_chair"
+      appt.status === "in_chair" ||
+      appt.status === "checked_in" ||
+      appt.status === "no_show"
     ) {
       throw new ConvexError({
         code: "INVALID_STATE",
@@ -626,11 +631,12 @@ export const cancelMyAppointment = mutation({
     }
 
     const clinic = await ctx.db.get(appt.clinicId);
-    const windowMs = (clinic?.cancellationWindowHours ?? 24) * 60 * 60 * 1000;
+    const windowHours = clinic?.cancellationWindowHours ?? 24;
+    const windowMs = windowHours * 60 * 60 * 1000;
     if (appt.startTimeUtc - Date.now() < windowMs) {
       throw new ConvexError({
         code: "CANCELLATION_WINDOW_PASSED",
-        message: `Online cancellation requires at least ${clinic?.cancellationWindowHours ?? 24} hours notice. Please call the clinic directly.`,
+        message: `Online cancellation requires at least ${windowHours} hours notice. Please call ${clinic?.name ?? "the clinic"} directly${clinic?.phone ? ` at ${clinic.phone}` : ""}.`,
       });
     }
 
@@ -641,16 +647,180 @@ export const cancelMyAppointment = mutation({
     });
 
     // Notify waitlisted patients asynchronously if waitlist automation is enabled
+    const waitlistEnabled = Boolean(clinic?.featureFlags.waitlistAutomationEnabled);
+    if (waitlistEnabled) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.waitlist.notifyWaitlistForCancellation,
+        {
+          clinicId: appt.clinicId,
+          dateKey: appt.dateKey,
+          dentistId: appt.dentistId,
+          startTimeUtc: appt.startTimeUtc,
+        }
+      );
+    }
+
+    return { cancelled: true, waitlistEnabled };
+  },
+});
+
+/**
+ * Allows a patient to self-service reschedule their own (or dependent's) upcoming
+ * appointment inside an ACID transaction, enforcing the clinic's cancellation/reschedule window.
+ */
+export const rescheduleMyAppointment = mutation({
+  args: {
+    appointmentId: v.id("appointments"),
+    dateKey: v.string(),
+    startTimeUtc: v.number(),
+    dentistId: v.id("dentists"),
+    chairId: v.id("chairs"),
+    sessionId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getAuthenticatedUser(ctx);
+    const appt = await ctx.db.get(args.appointmentId);
+    if (!appt) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Appointment not found.",
+      });
+    }
+
+    const patient = await ctx.db.get(appt.patientId);
+    if (!patient) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Patient not found." });
+    }
+
+    let isOwner = patient.userId === user._id;
+    if (!isOwner && patient.guardianPatientId) {
+      const guardian = await ctx.db.get(patient.guardianPatientId);
+      isOwner = guardian?.userId === user._id;
+    }
+    if (!isOwner) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "You can only reschedule your own or your dependent's appointments.",
+      });
+    }
+
+    if (appt.status !== "confirmed" && appt.status !== "pending_approval") {
+      throw new ConvexError({
+        code: "INVALID_STATE",
+        message: "Only confirmed or pending appointments can be rescheduled online.",
+      });
+    }
+
+    // Law #4: Clinic must be active/writable (rescheduling reuses existing slot quota)
+    const clinic = await assertClinicCanWrite(ctx, appt.clinicId, "staff");
+    const now = Date.now();
+    const windowHours = clinic.cancellationWindowHours ?? 24;
+    const windowMs = windowHours * 60 * 60 * 1000;
+    if (appt.startTimeUtc - now < windowMs) {
+      throw new ConvexError({
+        code: "CANCELLATION_WINDOW_PASSED",
+        message: `Online rescheduling requires at least ${windowHours} hours notice. Please call ${clinic.name} directly at ${clinic.phone}.`,
+      });
+    }
+
+    const service = await ctx.db.get(appt.serviceId);
+    if (!service || service.clinicId !== clinic._id || !service.isActive) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "The linked dental service is no longer active at this clinic.",
+      });
+    }
+
+    // Law #5: ACID Dual-Resource Conflict Verification (ignoring the current appointment)
+    const check = await verifySpecificPairAvailable(ctx, {
+      clinic,
+      service,
+      dateKey: args.dateKey,
+      dentistId: args.dentistId,
+      chairId: args.chairId,
+      startTimeUtc: args.startTimeUtc,
+      ignoreAppointmentId: appt._id,
+      ignoreSessionId: args.sessionId,
+      enforceScheduleRules: true,
+      minLeadMinutes: 15,
+    });
+    if (!check.ok) {
+      throw new ConvexError({
+        code: "SLOT_UNAVAILABLE",
+        message:
+          check.reason ??
+          "Selected time slot is no longer available. Please choose another slot.",
+      });
+    }
+
+    const previousDateKey = appt.dateKey;
+    const previousDentistId = appt.dentistId;
+    const previousStartTimeUtc = appt.startTimeUtc;
+
+    await ctx.db.patch(appt._id, {
+      dateKey: args.dateKey,
+      startTimeUtc: args.startTimeUtc,
+      endTimeUtc: check.endTimeUtc,
+      bufferEndTimeUtc: check.bufferEndTimeUtc,
+      dentistId: args.dentistId,
+      chairId: args.chairId,
+      reminder24hSent: false,
+      reminder2hSent: false,
+      updatedAt: now,
+    });
+
+    // Release any temporary lock held by this session
+    if (args.sessionId) {
+      const sessionLocks = await ctx.db
+        .query("slotLocks")
+        .withIndex("by_clinic_and_expires", (q) =>
+          q.eq("clinicId", clinic._id).gt("expiresAtUtc", now)
+        )
+        .collect();
+      for (const l of sessionLocks) {
+        if (l.lockedBySessionId === args.sessionId) {
+          await ctx.db.delete(l._id);
+        }
+      }
+    }
+
+    // Notify waitlisted patients about the newly vacated original slot
+    if (
+      clinic.featureFlags.waitlistAutomationEnabled &&
+      (previousDateKey !== args.dateKey || previousStartTimeUtc !== args.startTimeUtc)
+    ) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.waitlist.notifyWaitlistForCancellation,
+        {
+          clinicId: clinic._id,
+          dateKey: previousDateKey,
+          dentistId: previousDentistId,
+          startTimeUtc: previousStartTimeUtc,
+        }
+      );
+    }
+
+    // Send updated confirmation email asynchronously
     await ctx.scheduler.runAfter(
       0,
-      internal.waitlist.notifyWaitlistForCancellation,
-      {
-        clinicId: appt.clinicId,
-        dateKey: appt.dateKey,
-        dentistId: appt.dentistId,
-      }
+      internal.notifications.sendBookingConfirmation,
+      { appointmentId: appt._id }
     );
 
-    return { cancelled: true };
+    const [dentist, chair] = await Promise.all([
+      ctx.db.get(args.dentistId),
+      ctx.db.get(args.chairId),
+    ]);
+
+    return {
+      appointmentId: appt._id,
+      referenceCode: formatReferenceCode(appt._id),
+      startTimeUtc: args.startTimeUtc,
+      endTimeUtc: check.endTimeUtc,
+      dentistName: dentist?.displayName ?? "Assigned Dentist",
+      chairName: chair?.name ?? "Operatory Chair",
+    };
   },
 });

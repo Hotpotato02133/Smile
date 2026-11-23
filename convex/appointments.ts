@@ -9,6 +9,8 @@ import {
   requireClinicAccess,
 } from "./lib/permissions";
 import {
+  classifyTimeWindow,
+  getLocalDateKeyAndMinute,
   parseDateKey,
   verifySpecificPairAvailable,
 } from "./lib/scheduling";
@@ -652,9 +654,14 @@ export const transitionStatus = mutation({
             .eq("status", "waiting")
         )
         .collect();
+      const slotWindow = classifyTimeWindow(
+        getLocalDateKeyAndMinute(appt.startTimeUtc, clinic.timezone || "Asia/Manila")
+          .minuteOfDay
+      );
       const matching = waitingEntries.filter(
         (w) =>
-          !w.preferredDentistId || w.preferredDentistId === appt.dentistId
+          (!w.preferredDentistId || w.preferredDentistId === appt.dentistId) &&
+          (w.preferredTimeWindow === "any" || w.preferredTimeWindow === slotWindow)
       );
       waitlistMatchedCount = Math.min(matching.length, 5);
       if (waitlistMatchedCount > 0) {
@@ -665,6 +672,7 @@ export const transitionStatus = mutation({
             clinicId,
             dateKey: appt.dateKey,
             dentistId: appt.dentistId,
+            startTimeUtc: appt.startTimeUtc,
           }
         );
       }

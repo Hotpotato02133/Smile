@@ -14,6 +14,7 @@ import {
   Phone,
   Plus,
   ShieldCheck,
+  Trash2,
   UserRound,
   Users,
 } from "lucide-react";
@@ -93,9 +94,29 @@ export function FamilyHealthView({
   const createProfile = useMutation(
     api.patientPortal.createSelfOrDependentProfile
   );
+  const deleteDependent = useMutation(api.patientPortal.deleteDependentProfile);
 
   const [editingProfile, setEditingProfile] =
     useState<PatientProfileItem | null>(null);
+  const [deletingProfile, setDeletingProfile] =
+    useState<PatientProfileItem | null>(null);
+  const [submittingDelete, setSubmittingDelete] = useState(false);
+
+  const handleConfirmDelete = async () => {
+    if (!deletingProfile) return;
+    setSubmittingDelete(true);
+    try {
+      await deleteDependent({ patientId: deletingProfile._id });
+      toast.success(
+        `${deletingProfile.firstName} ${deletingProfile.lastName} removed from your family profiles.`
+      );
+      setDeletingProfile(null);
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not remove dependent profile."));
+    } finally {
+      setSubmittingDelete(false);
+    }
+  };
 
   const isDialogOpen = createDialogOpen || editingProfile !== null;
   const isEditing = editingProfile !== null;
@@ -328,14 +349,26 @@ export function FamilyHealthView({
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setEditingProfile(profile)}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[#F5F7FA] px-3 text-xs font-semibold text-slate-800 transition-colors hover:bg-[#EFEBFF] hover:text-[#4F3EC7] cursor-pointer"
-                    >
-                      <Pencil className="size-3" aria-hidden="true" />
-                      <span>Edit</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditingProfile(profile)}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full bg-[#F5F7FA] px-3 text-xs font-semibold text-slate-800 transition-colors hover:bg-[#EFEBFF] hover:text-[#4F3EC7] cursor-pointer"
+                      >
+                        <Pencil className="size-3" aria-hidden="true" />
+                        <span>Edit</span>
+                      </button>
+                      {profile.isDependent ? (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${profile.firstName} ${profile.lastName}`}
+                          onClick={() => setDeletingProfile(profile)}
+                          className="inline-flex size-8 items-center justify-center rounded-full bg-[#F5F7FA] text-slate-600 transition-colors hover:bg-rose-50 hover:text-rose-700 cursor-pointer"
+                        >
+                          <Trash2 className="size-3.5" aria-hidden="true" />
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
 
                   {/* Contact & Emergency Summary */}
@@ -453,7 +486,7 @@ export function FamilyHealthView({
                   </span>
                   {profile.clinicSlug ? (
                     <Link
-                      href={`/c/${profile.clinicSlug}`}
+                      href={`/c/${profile.clinicSlug}?patientId=${profile._id}`}
                       className="inline-flex items-center gap-1 font-semibold text-[#5B4BD6] hover:text-[#4332B8]"
                     >
                       <span>Book for {profile.firstName}</span>
@@ -777,6 +810,52 @@ export function FamilyHealthView({
               </button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Dependent Confirmation Modal */}
+      <Dialog
+        open={deletingProfile !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeletingProfile(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md rounded-[24px]">
+          <DialogHeader>
+            <DialogTitle className="font-heading text-lg font-bold">
+              Remove dependent profile?
+            </DialogTitle>
+            <DialogDescription>
+              {deletingProfile ? (
+                <>
+                  Remove{" "}
+                  <strong>
+                    {deletingProfile.firstName} {deletingProfile.lastName}
+                  </strong>{" "}
+                  from {deletingProfile.clinicName}? Profiles with existing
+                  appointments or dental chart records are preserved for medical
+                  record compliance.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setDeletingProfile(null)}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-[#F5F7FA] px-4 text-sm font-semibold text-slate-800 hover:bg-[#EAF1F8] cursor-pointer"
+            >
+              Keep Profile
+            </button>
+            <button
+              type="button"
+              disabled={submittingDelete}
+              onClick={handleConfirmDelete}
+              className="inline-flex h-10 items-center justify-center rounded-full bg-rose-600 px-5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
+            >
+              {submittingDelete ? "Removing…" : "Remove Dependent"}
+            </button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

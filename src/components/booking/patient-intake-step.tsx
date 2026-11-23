@@ -2,9 +2,9 @@
 
 import { SignInButton } from "@clerk/nextjs";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { ArrowLeft, LogIn, ShieldAlert, UserPlus, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -58,6 +58,7 @@ const intakeSchema = z.object({
   allergies: z.array(z.string()),
   otherAllergies: z.string().optional(),
   conditions: z.array(z.string()),
+  otherConditions: z.string().optional(),
   isTakingBloodThinners: z.boolean(),
   isPregnant: z.boolean(),
   dentalAnxietyLevel: z.enum(["none", "mild", "moderate", "severe"]),
@@ -107,6 +108,12 @@ function profileToDefaults(
   const extraAllergies = (profile?.medicalHistory.allergies ?? []).filter(
     (a) => !(COMMON_ALLERGIES as readonly string[]).includes(a)
   );
+  const knownConditions = (profile?.medicalHistory.conditions ?? []).filter((c) =>
+    (COMMON_CONDITIONS as readonly string[]).includes(c)
+  );
+  const extraConditions = (profile?.medicalHistory.conditions ?? []).filter(
+    (c) => !(COMMON_CONDITIONS as readonly string[]).includes(c)
+  );
 
   return {
     firstName: profile?.firstName ?? fallbackUser?.firstName ?? "",
@@ -120,7 +127,8 @@ function profileToDefaults(
     emergencyContactPhone: profile?.emergencyContactPhone ?? "",
     allergies: knownAllergies,
     otherAllergies: extraAllergies.join(", "),
-    conditions: profile?.medicalHistory.conditions ?? [],
+    conditions: knownConditions,
+    otherConditions: extraConditions.join(", "),
     isTakingBloodThinners:
       profile?.medicalHistory.isTakingBloodThinners ?? false,
     isPregnant: profile?.medicalHistory.isPregnant ?? false,
@@ -184,6 +192,13 @@ function IntakeFormInner({
     const mergedAllergies = Array.from(
       new Set([...values.allergies, ...extraAllergies])
     );
+    const extraConditions = (values.otherConditions ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const mergedConditions = Array.from(
+      new Set([...values.conditions, ...extraConditions])
+    );
 
     await onSubmit({
       bookingFor,
@@ -201,11 +216,11 @@ function IntakeFormInner({
         emergencyContactPhone: values.emergencyContactPhone || undefined,
         medicalHistory: {
           allergies: mergedAllergies,
-          conditions: values.conditions,
+          conditions: mergedConditions,
           isTakingBloodThinners: values.isTakingBloodThinners,
           isPregnant: values.isPregnant,
           dentalAnxietyLevel: values.dentalAnxietyLevel,
-          notes: values.medicalNotes || undefined,
+          notes: values.medicalNotes?.trim() || undefined,
         },
       },
     });
@@ -356,6 +371,11 @@ function IntakeFormInner({
               );
             })}
           </div>
+          <Input
+            placeholder="Other medical conditions (comma-separated, optional)"
+            className="text-xs"
+            {...form.register("otherConditions")}
+          />
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -404,13 +424,23 @@ function IntakeFormInner({
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="pt-chief">Chief Complaint / Reason for Visit</Label>
-          <Input
-            id="pt-chief"
-            placeholder="e.g., Routine 6-month cleaning or sensitivity on upper right molar"
-            {...form.register("chiefComplaint")}
-          />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="pt-chief">Chief Complaint / Reason for Visit</Label>
+            <Input
+              id="pt-chief"
+              placeholder="e.g., Routine 6-month cleaning or sensitivity on upper right molar"
+              {...form.register("chiefComplaint")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pt-med-notes">Additional Medical / Comfort Notes</Label>
+            <Input
+              id="pt-med-notes"
+              placeholder="e.g., Medications, tooth sensitivity, or preferred hand signals"
+              {...form.register("medicalNotes")}
+            />
+          </div>
         </div>
       </div>
 
@@ -429,23 +459,37 @@ function IntakeFormInner({
 
 export function PatientIntakeStep({
   clinicId,
+  initialPatientId,
   submitting,
   onBack,
   onSubmit,
 }: {
   clinicId: Id<"clinics">;
+  initialPatientId?: string | null;
   submitting: boolean;
   onBack: () => void;
   onSubmit: (payload: PatientIntakeSubmitPayload) => Promise<void>;
 }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
+  const ensureUser = useMutation(api.users.ensureCurrentUser);
   const profileData = useQuery(
     api.publicBooking.getMyPatientProfilesForClinic,
     isAuthenticated ? { clinicId } : "skip"
   );
 
-  const [bookingFor, setBookingFor] = useState<"self" | "dependent">("self");
-  const [selectedDependentId, setSelectedDependentId] = useState<string>("new");
+  // Immediately provision Convex user row after Clerk sign-in/sign-up so new patients never stall
+  useEffect(() => {
+    if (isAuthenticated) {
+      void ensureUser().catch(() => {});
+    }
+  }, [isAuthenticated, ensureUser]);
+
+  const [bookingForOverride, setBookingFor] = useState<
+    "self" | "dependent" | null
+  >(null);
+  const [selectedDependentOverride, setSelectedDependentId] = useState<
+    string | null
+  >(null);
 
   if (isLoading) {
     return (
@@ -506,6 +550,15 @@ export function PatientIntakeStep({
       </Alert>
     );
   }
+
+  const matchedInitialDependent = initialPatientId
+    ? (profileData.dependents.find((d) => d._id === initialPatientId) ?? null)
+    : null;
+  const bookingFor: "self" | "dependent" =
+    bookingForOverride ?? (matchedInitialDependent ? "dependent" : "self");
+  const selectedDependentId =
+    selectedDependentOverride ??
+    (matchedInitialDependent ? matchedInitialDependent._id : "new");
 
   const activeDependent =
     bookingFor === "dependent" && selectedDependentId !== "new"

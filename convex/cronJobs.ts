@@ -384,20 +384,46 @@ export const dispatchHygieneRecalls = internalMutation({
 });
 
 /**
- * Daily cron 5: Safety-net sweep deleting any orphaned expired `slotLocks`.
+ * Daily cron 5: Safety-net sweep deleting any orphaned expired `slotLocks`
+ * and expiring past-date `waitlist` entries (`waiting` or `notified`).
  */
 export const cleanupExpiredSlotLocks = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    const expired = await ctx.db
-      .query("slotLocks")
-      .withIndex("by_expires", (q) => q.lte("expiresAtUtc", now))
-      .take(500);
+    const todayKey = toManilaDateKey(now);
 
-    for (const lock of expired) {
+    const [expiredLocks, staleWaiting, staleNotified] = await Promise.all([
+      ctx.db
+        .query("slotLocks")
+        .withIndex("by_expires", (q) => q.lte("expiresAtUtc", now))
+        .take(500),
+      ctx.db
+        .query("waitlist")
+        .withIndex("by_status_and_date", (q) =>
+          q.eq("status", "waiting").lt("preferredDateKey", todayKey)
+        )
+        .take(250),
+      ctx.db
+        .query("waitlist")
+        .withIndex("by_status_and_date", (q) =>
+          q.eq("status", "notified").lt("preferredDateKey", todayKey)
+        )
+        .take(250),
+    ]);
+
+    for (const lock of expiredLocks) {
       await ctx.db.delete(lock._id);
     }
-    return { deleted: expired.length };
+
+    const staleWaitlist = [...staleWaiting, ...staleNotified];
+    for (const entry of staleWaitlist) {
+      await ctx.db.patch(entry._id, { status: "expired" });
+    }
+
+    return {
+      deleted: expiredLocks.length,
+      waitlistExpired: staleWaitlist.length,
+    };
   },
 });

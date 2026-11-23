@@ -130,3 +130,96 @@ export function formatMinutes12h(minutes: number): string {
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
   return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
 }
+
+/** Returns today's `"YYYY-MM-DD"` in the given IANA timezone. */
+export function getTodayDateKeyInTimeZone(timeZone = "Asia/Manila"): string {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = formatter.formatToParts(new Date());
+    const year = parts.find((p) => p.type === "year")?.value ?? "2026";
+    const month = parts.find((p) => p.type === "month")?.value ?? "01";
+    const day = parts.find((p) => p.type === "day")?.value ?? "01";
+    return `${year}-${month}-${day}`;
+  } catch {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+}
+
+/** Converts a `"YYYY-MM-DD"` calendar key to a local Date at 00:00:00 (safe for DayPicker). */
+export function dateKeyToLocalDate(dateKey: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const dt = new Date(year, month - 1, day, 0, 0, 0, 0);
+  if (
+    dt.getFullYear() !== year ||
+    dt.getMonth() !== month - 1 ||
+    dt.getDate() !== day
+  ) {
+    return null;
+  }
+  return dt;
+}
+
+/** Groups consecutive clinic operating days sharing identical hours for clean display. */
+export function formatOperatingHoursGroups(
+  hours: Array<{
+    dayOfWeek: number;
+    isOpen: boolean;
+    openMinute: number;
+    closeMinute: number;
+  }>
+): Array<{ days: string; hours: string }> {
+  // Order Mon(1)..Sat(6), Sun(0)
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const byDay = new Map(hours.map((h) => [h.dayOfWeek, h]));
+  const openEntries = order
+    .map((day) => byDay.get(day))
+    .filter((h): h is NonNullable<typeof h> => Boolean(h && h.isOpen));
+
+  if (openEntries.length === 0) return [];
+
+  const groups: Array<{ dayNums: number[]; openMinute: number; closeMinute: number }> = [];
+  for (const entry of openEntries) {
+    const prev = groups[groups.length - 1];
+    const prevIdx = prev ? order.indexOf(prev.dayNums[prev.dayNums.length - 1]) : -1;
+    const currIdx = order.indexOf(entry.dayOfWeek);
+    if (
+      prev &&
+      currIdx === prevIdx + 1 &&
+      prev.openMinute === entry.openMinute &&
+      prev.closeMinute === entry.closeMinute
+    ) {
+      prev.dayNums.push(entry.dayOfWeek);
+    } else {
+      groups.push({
+        dayNums: [entry.dayOfWeek],
+        openMinute: entry.openMinute,
+        closeMinute: entry.closeMinute,
+      });
+    }
+  }
+
+  return groups.map((g) => {
+    const first = DAY_SHORT_NAMES[g.dayNums[0]];
+    const last = DAY_SHORT_NAMES[g.dayNums[g.dayNums.length - 1]];
+    const days =
+      g.dayNums.length === 1
+        ? first
+        : g.dayNums.length === 2
+          ? `${first}, ${last}`
+          : `${first}–${last}`;
+    return {
+      days,
+      hours: `${formatMinutes12h(g.openMinute)} – ${formatMinutes12h(g.closeMinute)}`,
+    };
+  });
+}

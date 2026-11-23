@@ -59,9 +59,9 @@ export const listClinics = query({
 
     const clinics = args.status
       ? await ctx.db
-          .query("clinics")
-          .withIndex("by_status", (q) => q.eq("status", args.status!))
-          .collect()
+        .query("clinics")
+        .withIndex("by_status", (q) => q.eq("status", args.status!))
+        .collect()
       : await ctx.db.query("clinics").collect();
 
     const plans = await ctx.db.query("subscriptionPlans").collect();
@@ -72,13 +72,13 @@ export const listClinics = query({
     const term = args.search?.trim().toLowerCase();
     const filtered = term
       ? clinics.filter(
-          (c) =>
-            c.name.toLowerCase().includes(term) ||
-            c.slug.toLowerCase().includes(term) ||
-            c.city.toLowerCase().includes(term) ||
-            c.province.toLowerCase().includes(term) ||
-            c.email.toLowerCase().includes(term)
-        )
+        (c) =>
+          c.name.toLowerCase().includes(term) ||
+          c.slug.toLowerCase().includes(term) ||
+          c.city.toLowerCase().includes(term) ||
+          c.province.toLowerCase().includes(term) ||
+          c.email.toLowerCase().includes(term)
+      )
       : clinics;
 
     filtered.sort((a, b) => b.createdAt - a.createdAt);
@@ -89,17 +89,17 @@ export const listClinics = query({
         ...clinic,
         plan: plan
           ? {
-              _id: plan._id,
-              code: plan.code,
-              name: plan.name,
-              monthlyPricePhp: plan.monthlyPricePhp,
-              annualPricePhp: plan.annualPricePhp,
-              maxDentists: plan.maxDentists,
-              maxChairs: plan.maxChairs,
-              maxAppointmentsPerMonth: plan.maxAppointmentsPerMonth,
-              maxStorageBytes: plan.maxStorageBytes,
-              maxEmailsPerMonth: plan.maxEmailsPerMonth,
-            }
+            _id: plan._id,
+            code: plan.code,
+            name: plan.name,
+            monthlyPricePhp: plan.monthlyPricePhp,
+            annualPricePhp: plan.annualPricePhp,
+            maxDentists: plan.maxDentists,
+            maxChairs: plan.maxChairs,
+            maxAppointmentsPerMonth: plan.maxAppointmentsPerMonth,
+            maxStorageBytes: plan.maxStorageBytes,
+            maxEmailsPerMonth: plan.maxEmailsPerMonth,
+          }
           : null,
       };
     });
@@ -696,10 +696,10 @@ export const listAnnouncements = query({
 
     const items = args.activeOnly
       ? await ctx.db
-          .query("systemAnnouncements")
-          .withIndex("by_active", (q) => q.eq("isActive", true))
-          .order("desc")
-          .collect()
+        .query("systemAnnouncements")
+        .withIndex("by_active", (q) => q.eq("isActive", true))
+        .order("desc")
+        .collect()
       : await ctx.db.query("systemAnnouncements").order("desc").collect();
 
     return items;
@@ -972,21 +972,21 @@ export const listAuditLogsPaginated = query({
 
     const result = args.clinicId
       ? await ctx.db
-          .query("platformAuditLogs")
-          .withIndex("by_clinic_and_date", (q) => q.eq("clinicId", args.clinicId))
-          .order("desc")
-          .paginate(args.paginationOpts)
+        .query("platformAuditLogs")
+        .withIndex("by_clinic_and_date", (q) => q.eq("clinicId", args.clinicId))
+        .order("desc")
+        .paginate(args.paginationOpts)
       : args.actorUserId
         ? await ctx.db
-            .query("platformAuditLogs")
-            .withIndex("by_actor", (q) => q.eq("actorUserId", args.actorUserId!))
-            .order("desc")
-            .paginate(args.paginationOpts)
+          .query("platformAuditLogs")
+          .withIndex("by_actor", (q) => q.eq("actorUserId", args.actorUserId!))
+          .order("desc")
+          .paginate(args.paginationOpts)
         : await ctx.db
-            .query("platformAuditLogs")
-            .withIndex("by_created_at")
-            .order("desc")
-            .paginate(args.paginationOpts);
+          .query("platformAuditLogs")
+          .withIndex("by_created_at")
+          .order("desc")
+          .paginate(args.paginationOpts);
 
     const actionFilter = args.actionType?.trim();
     const filtered = result.page.filter((log) => {
@@ -1054,15 +1054,15 @@ export const listAuditLogs = query({
     const takeLimit = Math.min(Math.max(args.limit ?? 50, 1), 200);
     const logs = args.clinicId
       ? await ctx.db
-          .query("platformAuditLogs")
-          .withIndex("by_clinic_and_date", (q) => q.eq("clinicId", args.clinicId))
-          .order("desc")
-          .take(takeLimit)
+        .query("platformAuditLogs")
+        .withIndex("by_clinic_and_date", (q) => q.eq("clinicId", args.clinicId))
+        .order("desc")
+        .take(takeLimit)
       : await ctx.db
-          .query("platformAuditLogs")
-          .withIndex("by_created_at")
-          .order("desc")
-          .take(takeLimit);
+        .query("platformAuditLogs")
+        .withIndex("by_created_at")
+        .order("desc")
+        .take(takeLimit);
 
     const actionFilter = args.actionType?.trim();
     const filtered = actionFilter
@@ -1134,10 +1134,10 @@ export const listAllUsers = query({
 
     const rows = args.role
       ? await ctx.db
-          .query("users")
-          .withIndex("by_role", (q) => q.eq("role", args.role!))
-          .order("desc")
-          .take(250)
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", args.role!))
+        .order("desc")
+        .take(250)
       : await ctx.db.query("users").order("desc").take(250);
 
     const term = args.search?.trim().toLowerCase();
@@ -1213,10 +1213,10 @@ export const listAllInvitations = query({
 
     const rows = args.status
       ? await ctx.db
-          .query("staffInvitations")
-          .withIndex("by_status_and_created", (q) => q.eq("status", args.status!))
-          .order("desc")
-          .take(200)
+        .query("staffInvitations")
+        .withIndex("by_status_and_created", (q) => q.eq("status", args.status!))
+        .order("desc")
+        .take(200)
       : await ctx.db.query("staffInvitations").order("desc").take(200);
 
     const term = args.search?.trim().toLowerCase();

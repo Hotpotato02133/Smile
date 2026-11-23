@@ -119,6 +119,50 @@ export function localDateMinuteToUtc(
   return wallAsUtc - offset2;
 }
 
+/** Converts a UTC epoch ms timestamp into local `{ dateKey, minuteOfDay }` in `timeZone`. */
+export function getLocalDateKeyAndMinute(
+  utcMs: number,
+  timeZone: string
+): { dateKey: string; minuteOfDay: number } {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const parts = formatter.formatToParts(new Date(utcMs));
+    const lookup = (type: string) =>
+      Number(parts.find((p) => p.type === type)?.value ?? 0);
+    const year = lookup("year");
+    const month = String(lookup("month")).padStart(2, "0");
+    const day = String(lookup("day")).padStart(2, "0");
+    const hour = lookup("hour") === 24 ? 0 : lookup("hour");
+    const minute = lookup("minute");
+    return {
+      dateKey: `${year}-${month}-${day}`,
+      minuteOfDay: hour * 60 + minute,
+    };
+  } catch {
+    const d = new Date(utcMs + 8 * 60 * 60 * 1000);
+    const year = d.getUTCFullYear();
+    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return {
+      dateKey: `${year}-${month}-${day}`,
+      minuteOfDay: d.getUTCHours() * 60 + d.getUTCMinutes(),
+    };
+  }
+}
+
+/** Classifies a clinic-local minute of day (0..1439) into morning (<12:00) or afternoon (>=12:00). */
+export function classifyTimeWindow(minuteOfDay: number): "morning" | "afternoon" {
+  return minuteOfDay < 12 * 60 ? "morning" : "afternoon";
+}
+
 /** Checks whether a clinic is currently allowed to accept new online bookings (Law #4). */
 export function getClinicBookingEligibility(
   clinic: Doc<"clinics">,
@@ -130,7 +174,10 @@ export function getClinicBookingEligibility(
       reason: "This clinic is currently not accepting online bookings.",
     };
   }
-  if (clinic.status === "trial" && now > clinic.subscriptionEndsAt) {
+  if (
+    (clinic.status === "trial" || clinic.status === "active") &&
+    now > clinic.subscriptionEndsAt
+  ) {
     return {
       isBookable: false,
       reason: "This clinic's booking portal is temporarily unavailable.",
@@ -399,6 +446,8 @@ export async function verifySpecificPairAvailable(
     startTimeUtc: number;
     ignoreSessionId?: string;
     ignoreAppointmentId?: Id<"appointments">;
+    enforceScheduleRules?: boolean;
+    minLeadMinutes?: number;
   }
 ): Promise<{
   ok: boolean;
@@ -415,12 +464,53 @@ export async function verifySpecificPairAvailable(
     startTimeUtc,
     ignoreSessionId,
     ignoreAppointmentId,
+    enforceScheduleRules = false,
+    minLeadMinutes = 0,
   } = params;
 
   const endTimeUtc = startTimeUtc + service.durationMinutes * 60_000;
   const bufferEndTimeUtc =
     startTimeUtc + (service.durationMinutes + service.bufferMinutes) * 60_000;
   const now = Date.now();
+
+  if (enforceScheduleRules) {
+    if (!parseDateKey(dateKey)) {
+      return { ok: false, reason: "Invalid appointment date.", endTimeUtc, bufferEndTimeUtc };
+    }
+    if (startTimeUtc < now + minLeadMinutes * 60_000) {
+      return {
+        ok: false,
+        reason: "Selected time slot is in the past. Please choose an upcoming time.",
+        endTimeUtc,
+        bufferEndTimeUtc,
+      };
+    }
+    const timeZone = clinic.timezone || "Asia/Manila";
+    const local = getLocalDateKeyAndMinute(startTimeUtc, timeZone);
+    if (local.dateKey !== dateKey) {
+      return {
+        ok: false,
+        reason: "Selected time does not match the chosen appointment date.",
+        endTimeUtc,
+        bufferEndTimeUtc,
+      };
+    }
+    const dayOfWeek = getDayOfWeekFromDateKey(dateKey);
+    const clinicDay = clinic.operatingHours.find((h) => h.dayOfWeek === dayOfWeek);
+    if (
+      !clinicDay ||
+      !clinicDay.isOpen ||
+      local.minuteOfDay < clinicDay.openMinute ||
+      local.minuteOfDay + service.durationMinutes > clinicDay.closeMinute
+    ) {
+      return {
+        ok: false,
+        reason: "Selected time is outside this clinic's operating hours.",
+        endTimeUtc,
+        bufferEndTimeUtc,
+      };
+    }
+  }
 
   const [dentist, chair, dayAppointments, activeLocks, timeOffRows] =
     await Promise.all([
@@ -451,6 +541,44 @@ export async function verifySpecificPairAvailable(
   }
   if (!chair || chair.clinicId !== clinic._id || !chair.isActive) {
     return { ok: false, reason: "Selected operatory chair is unavailable.", endTimeUtc, bufferEndTimeUtc };
+  }
+
+  if (enforceScheduleRules) {
+    const timeZone = clinic.timezone || "Asia/Manila";
+    const local = getLocalDateKeyAndMinute(startTimeUtc, timeZone);
+    const dayOfWeek = getDayOfWeekFromDateKey(dateKey);
+    const shift = dentist.weeklySchedule.find((w) => w.dayOfWeek === dayOfWeek);
+    const slotEndMinute = local.minuteOfDay + service.durationMinutes;
+    if (
+      !shift ||
+      !shift.isWorking ||
+      local.minuteOfDay < shift.startMinute ||
+      slotEndMinute > shift.endMinute
+    ) {
+      return {
+        ok: false,
+        reason: "Selected dentist is not scheduled to work during this time.",
+        endTimeUtc,
+        bufferEndTimeUtc,
+      };
+    }
+    if (
+      shift.breakStartMinute !== undefined &&
+      shift.breakEndMinute !== undefined &&
+      intervalsOverlap(
+        local.minuteOfDay,
+        slotEndMinute,
+        shift.breakStartMinute,
+        shift.breakEndMinute
+      )
+    ) {
+      return {
+        ok: false,
+        reason: "Selected time overlaps the dentist's scheduled break.",
+        endTimeUtc,
+        bufferEndTimeUtc,
+      };
+    }
   }
 
   const requiredTag = service.requiredChairTag?.trim().toLowerCase();
