@@ -1,13 +1,15 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import {
   AlertTriangle,
   Armchair,
   ArrowLeft,
   BarChart3,
   BriefcaseMedical,
+  Building2,
+  CreditCard,
   Eye,
   LayoutDashboard,
   Megaphone,
@@ -25,6 +27,8 @@ import {
   type ReactNode,
   Suspense,
   useContext,
+  useEffect,
+  useRef,
   useState,
 } from "react";
 import { useEnvConfig } from "@/components/providers/app-providers";
@@ -39,7 +43,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { formatDate } from "@/lib/format";
+import { formatDate, getErrorMessage } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -51,12 +55,14 @@ const NAV_ITEMS = [
   { href: "/admin/services", label: "Dental Services", icon: BriefcaseMedical },
   { href: "/admin/staff", label: "Staff & Invites", icon: Users },
   { href: "/admin/settings", label: "Clinic Settings", icon: Settings },
+  { href: "/admin/billing", label: "Subscription & Billing", icon: CreditCard },
   { href: "/admin/reports", label: "Local Reports", icon: BarChart3 },
 ] as const;
 
 type ClinicAdminContextValue = {
   overrideClinicId: Id<"clinics"> | undefined;
   isReadOnly: boolean;
+  readOnlyReason: string | null;
   isSuperAdminOverride: boolean;
   buildHref: (path: string) => string;
 };
@@ -64,6 +70,7 @@ type ClinicAdminContextValue = {
 const ClinicAdminContext = createContext<ClinicAdminContextValue>({
   overrideClinicId: undefined,
   isReadOnly: false,
+  readOnlyReason: null,
   isSuperAdminOverride: false,
   buildHref: (p) => p,
 });
@@ -152,6 +159,7 @@ function ConnectedShellInner({
       : path;
 
   const isReadOnly = workspace?.isReadOnly ?? false;
+  const readOnlyReason = workspace?.readOnlyReason ?? null;
   const isSuperAdminOverride = workspace?.isSuperAdminOverride ?? false;
 
   return (
@@ -159,6 +167,7 @@ function ConnectedShellInner({
       value={{
         overrideClinicId,
         isReadOnly,
+        readOnlyReason,
         isSuperAdminOverride,
         buildHref,
       }}
@@ -192,7 +201,10 @@ function ConnectedShellInner({
 
           <div className="border-t p-3 text-xs text-muted-foreground">
             {workspace?.plan ? (
-              <div className="space-y-1">
+              <Link
+                href={buildHref("/admin/billing")}
+                className="block space-y-1 rounded-md p-1.5 transition-colors hover:bg-sidebar-accent/60"
+              >
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-foreground">
                     {workspace.plan.name}
@@ -202,7 +214,7 @@ function ConnectedShellInner({
                 <p>
                   Renews {formatDate(workspace.clinic.subscriptionEndsAt)}
                 </p>
-              </div>
+              </Link>
             ) : (
               <p>Clinic Setup Portal</p>
             )}
@@ -237,33 +249,51 @@ function ConnectedShellInner({
             </div>
           ) : null}
 
-          {/* Past Due Renewal Banner (Law #4) */}
-          {workspace?.clinic.status === "past_due" ? (
-            <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200 lg:px-6">
-              <AlertTriangle className="size-4 shrink-0" />
-              <span>
-                <strong>Subscription Past Due:</strong> Your clinic is in its
-                3-day grace period
-                {workspace.clinic.gracePeriodEndsAt
-                  ? ` (ends ${formatDate(workspace.clinic.gracePeriodEndsAt)})`
-                  : ""}
-                . Renew now to avoid automatic Read-Only suspension.
-              </span>
+          {/* Past Due Renewal Banner (Law #4 — inside grace period) */}
+          {workspace?.clinic.status === "past_due" && !isReadOnly ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200 lg:px-6">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>
+                  <strong>Subscription Past Due:</strong> Your clinic is in its
+                  3-day grace period
+                  {workspace.clinic.gracePeriodEndsAt
+                    ? ` (ends ${formatDate(workspace.clinic.gracePeriodEndsAt)})`
+                    : ""}
+                  . Renew now to avoid automatic Read-Only suspension.
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                render={<Link href={buildHref("/admin/billing")} />}
+              >
+                View Billing
+              </Button>
             </div>
           ) : null}
 
-          {/* Suspended / Archived Read-Only Banner (Law #4) */}
-          {workspace &&
-          (workspace.clinic.status === "suspended" ||
-            workspace.clinic.status === "archived") ? (
-            <div className="flex items-center gap-2 border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs text-rose-900 dark:text-rose-200 lg:px-6">
-              <ShieldAlert className="size-4 shrink-0" />
-              <span>
-                <strong>Read-Only Mode ({workspace.clinic.status}):</strong>{" "}
-                Existing records remain accessible, but creating or editing
-                resources and public bookings on{" "}
-                <code>/c/{workspace.clinic.slug}</code> are paused until renewal.
-              </span>
+          {/* Suspended, Archived, Expired Trial, Expired Active, or Grace-Expired Read-Only Banner (Law #4) */}
+          {workspace && isReadOnly && !isSuperAdminOverride ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs text-rose-900 dark:text-rose-200 lg:px-6">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="size-4 shrink-0" />
+                <span>
+                  <strong>Read-Only Mode ({workspace.clinic.status.replace("_", " ")}):</strong>{" "}
+                  {readOnlyReason ??
+                    "Existing records remain accessible, while editing and public bookings are paused until renewal."}{" "}
+                  (<code>/c/{workspace.clinic.slug}</code> paused)
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                render={<Link href={buildHref("/admin/billing")} />}
+              >
+                View Billing &amp; Invoices
+              </Button>
             </div>
           ) : null}
 
@@ -369,6 +399,170 @@ function UnconfiguredShell({ children }: { children: ReactNode }) {
   );
 }
 
+function ClinicAdminAuthGuard({
+  children,
+  overrideClinicId,
+}: {
+  children: ReactNode;
+  overrideClinicId: Id<"clinics"> | undefined;
+}) {
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const ensureUser = useMutation(api.users.ensureCurrentUser);
+  const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const syncStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isAuthenticated || user !== null || syncStartedRef.current) return;
+    let cancelled = false;
+    syncStartedRef.current = true;
+    void ensureUser()
+      .then(() => {
+        if (!cancelled) setSyncError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setSyncError(
+            getErrorMessage(err, "Unable to sync your user account.")
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, user, ensureUser]);
+
+  if (authLoading || (isAuthenticated && user === undefined)) {
+    return (
+      <div className="flex min-h-screen flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
+        Loading clinic workspace…
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="mx-auto my-12 max-w-md px-4">
+        <Alert className="p-6">
+          <ShieldCheck className="size-4" />
+          <AlertTitle>Clinic Admin sign-in required</AlertTitle>
+          <AlertDescription className="mt-2 space-y-4">
+            <p>
+              Sign in with your Clinic Admin account to manage dentists,
+              operatory chairs, dental services, staff, billing, and reports.
+            </p>
+            <Button
+              className="w-full"
+              render={<Link href="/sign-in?redirect_url=%2Fadmin" />}
+            >
+              Sign in to Clinic Admin
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!user) {
+    if (syncError) {
+      return (
+        <div className="mx-auto my-12 max-w-md px-4">
+          <Alert variant="destructive" className="p-6">
+            <ShieldAlert className="size-4" />
+            <AlertTitle>Account inactive or unavailable</AlertTitle>
+            <AlertDescription className="mt-2 space-y-4">
+              <p>{syncError}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  render={<Link href="/" />}
+                >
+                  Return Home
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex min-h-screen flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <div className="size-7 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        <p className="text-sm text-muted-foreground">
+          Syncing your clinic account…
+        </p>
+      </div>
+    );
+  }
+
+  if (user.role === "super_admin" && !overrideClinicId) {
+    return (
+      <div className="mx-auto my-12 max-w-md px-4">
+        <Alert className="p-6">
+          <Building2 className="size-4" />
+          <AlertTitle>Select a clinic to inspect</AlertTitle>
+          <AlertDescription className="mt-2 space-y-4">
+            <p>
+              You are signed in as a <strong>Super Admin</strong> ({user.email}
+              ). Open the Clinics directory and choose{" "}
+              <strong>View As Clinic</strong> to inspect a tenant&apos;s{" "}
+              <code>/admin</code> workspace.
+            </p>
+            <Button
+              className="w-full"
+              render={<Link href="/super-admin/clinics" />}
+            >
+              Open Super Admin Clinics
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const canAccessAdmin =
+    (user.role === "clinic_admin" && Boolean(user.clinicId)) ||
+    (user.role === "super_admin" && Boolean(overrideClinicId));
+
+  if (!canAccessAdmin) {
+    return (
+      <div className="mx-auto my-12 max-w-md px-4">
+        <Alert variant="destructive" className="p-6">
+          <ShieldAlert className="size-4" />
+          <AlertTitle>Clinic Admin access required</AlertTitle>
+          <AlertDescription className="mt-2 space-y-4">
+            <p>
+              Your signed-in account (<code>{user.email}</code>) currently has
+              the{" "}
+              <strong className="capitalize">
+                {user.role.replace("_", " ")}
+              </strong>{" "}
+              role{user.role === "clinic_admin" && !user.clinicId ? " without an assigned clinic" : ""}{" "}
+              and cannot open <code>/admin</code>.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" render={<Link href="/post-login" />}>
+                Go to My Workspace
+              </Button>
+              <Button size="sm" variant="outline" render={<Link href="/" />}>
+                Back to Home
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  return (
+    <ConnectedShellInner overrideClinicId={overrideClinicId}>
+      {children}
+    </ConnectedShellInner>
+  );
+}
+
 function SearchParamsShellResolver({ children }: { children: ReactNode }) {
   const { isConfigured } = useEnvConfig();
   const searchParams = useSearchParams();
@@ -380,9 +574,9 @@ function SearchParamsShellResolver({ children }: { children: ReactNode }) {
   }
 
   return (
-    <ConnectedShellInner overrideClinicId={overrideClinicId}>
+    <ClinicAdminAuthGuard overrideClinicId={overrideClinicId}>
       {children}
-    </ConnectedShellInner>
+    </ClinicAdminAuthGuard>
   );
 }
 

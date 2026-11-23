@@ -9,6 +9,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -48,6 +49,7 @@ import {
   formatMinutes12h,
   getErrorCode,
   getErrorMessage,
+  localDateTimeToUtc,
   minutesToTimeInput,
   timeInputToMinutes,
 } from "@/lib/format";
@@ -100,7 +102,7 @@ const dentistFormSchema = z.object({
 type DentistFormValues = z.infer<typeof dentistFormSchema>;
 
 export function DentistsManager() {
-  const { overrideClinicId, isReadOnly } = useClinicAdminContext();
+  const { overrideClinicId, isReadOnly, buildHref } = useClinicAdminContext();
   const workspace = useQuery(api.clinicAdmin.getClinicWorkspace, {
     overrideClinicId,
   });
@@ -285,15 +287,38 @@ export function DentistsManager() {
   const handleAddTimeOff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!timeOffDentist || !timeOffStart || !timeOffEnd) return;
+    const clinicTz = workspace?.clinic.timezone || "Asia/Manila";
+    const [startDatePart, startTimePart] = timeOffStart.split("T");
+    const [endDatePart, endTimePart] = timeOffEnd.split("T");
+    const startTimeUtc =
+      startDatePart && startTimePart
+        ? localDateTimeToUtc(startDatePart, startTimePart, clinicTz)
+        : Date.parse(timeOffStart);
+    const endTimeUtc =
+      endDatePart && endTimePart
+        ? localDateTimeToUtc(endDatePart, endTimePart, clinicTz)
+        : Date.parse(timeOffEnd);
+
+    if (Number.isNaN(startTimeUtc) || Number.isNaN(endTimeUtc)) {
+      toast.error("Enter valid start and end dates.");
+      return;
+    }
+
     setSavingTimeOff(true);
     try {
-      await addDentistTimeOff({
+      const res = await addDentistTimeOff({
         dentistId: timeOffDentist.id,
-        startTimeUtc: Date.parse(timeOffStart),
-        endTimeUtc: Date.parse(timeOffEnd),
+        startTimeUtc,
+        endTimeUtc,
         reason: timeOffReason || "Scheduled leave",
       });
-      toast.success("Time-off block added.");
+      if (res.overlappingCount > 0) {
+        toast.warning(
+          `Time-off saved, but ${res.overlappingCount} existing appointment(s) overlap this window and should be rescheduled.`
+        );
+      } else {
+        toast.success("Time-off block added.");
+      }
       setTimeOffDentist(null);
       setTimeOffStart("");
       setTimeOffEnd("");
@@ -347,9 +372,20 @@ export function DentistsManager() {
         <Alert variant="destructive">
           <AlertTriangle className="size-4" />
           <AlertTitle>Plan Dentist Quota Reached</AlertTitle>
-          <AlertDescription>
-            {quotaBannerMessage} Contact your platform administrator to upgrade
-            to a higher tier (e.g., Smile Pro Clinic supports up to 8 dentists).
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+            <span>
+              {quotaBannerMessage} Contact your platform administrator to
+              upgrade to a higher tier (e.g., Smile Pro Clinic supports up to 8
+              dentists).
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              render={<Link href={buildHref("/admin/billing")} />}
+            >
+              View Plan &amp; Billing
+            </Button>
           </AlertDescription>
         </Alert>
       ) : null}
@@ -408,6 +444,11 @@ export function DentistsManager() {
                 </CardHeader>
 
                 <CardContent className="space-y-4">
+                  {dentist.bio ? (
+                    <p className="text-xs text-muted-foreground">
+                      {dentist.bio}
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-1.5">
                     {dentist.specialties.map((sp) => (
                       <Badge key={sp} variant="secondary" className="text-xs">
@@ -749,39 +790,76 @@ export function DentistsManager() {
                           />
                         </div>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Switch
+                            size="sm"
+                            aria-label={`Lunch break on ${DAY_SHORT_NAMES[day.dayOfWeek]}`}
+                            checked={
+                              day.breakStartMinute !== undefined &&
+                              day.breakEndMinute !== undefined
+                            }
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                const defaultStart = Math.max(
+                                  day.startMinute,
+                                  Math.min(720, day.endMinute - 60)
+                                );
+                                const defaultEnd = Math.min(
+                                  day.endMinute,
+                                  defaultStart + 60
+                                );
+                                updateScheduleDay(day.dayOfWeek, {
+                                  breakStartMinute: defaultStart,
+                                  breakEndMinute:
+                                    defaultEnd > defaultStart
+                                      ? defaultEnd
+                                      : day.endMinute,
+                                });
+                              } else {
+                                updateScheduleDay(day.dayOfWeek, {
+                                  breakStartMinute: undefined,
+                                  breakEndMinute: undefined,
+                                });
+                              }
+                            }}
+                          />
                           <span className="text-muted-foreground">Break:</span>
-                          <Input
-                            type="time"
-                            className="h-7 px-2 font-mono text-xs"
-                            value={minutesToTimeInput(
-                              day.breakStartMinute ?? 720
-                            )}
-                            onChange={(e) =>
-                              updateScheduleDay(day.dayOfWeek, {
-                                breakStartMinute: timeInputToMinutes(
-                                  e.target.value,
-                                  720
-                                ),
-                              })
-                            }
-                          />
-                          <span>–</span>
-                          <Input
-                            type="time"
-                            className="h-7 px-2 font-mono text-xs"
-                            value={minutesToTimeInput(
-                              day.breakEndMinute ?? 780
-                            )}
-                            onChange={(e) =>
-                              updateScheduleDay(day.dayOfWeek, {
-                                breakEndMinute: timeInputToMinutes(
-                                  e.target.value,
-                                  780
-                                ),
-                              })
-                            }
-                          />
+                          {day.breakStartMinute !== undefined &&
+                          day.breakEndMinute !== undefined ? (
+                            <>
+                              <Input
+                                type="time"
+                                className="h-7 w-24 px-1.5 font-mono text-xs"
+                                value={minutesToTimeInput(day.breakStartMinute)}
+                                onChange={(e) =>
+                                  updateScheduleDay(day.dayOfWeek, {
+                                    breakStartMinute: timeInputToMinutes(
+                                      e.target.value,
+                                      day.breakStartMinute ?? 720
+                                    ),
+                                  })
+                                }
+                              />
+                              <span>–</span>
+                              <Input
+                                type="time"
+                                className="h-7 w-24 px-1.5 font-mono text-xs"
+                                value={minutesToTimeInput(day.breakEndMinute)}
+                                onChange={(e) =>
+                                  updateScheduleDay(day.dayOfWeek, {
+                                    breakEndMinute: timeInputToMinutes(
+                                      e.target.value,
+                                      day.breakEndMinute ?? 780
+                                    ),
+                                  })
+                                }
+                              />
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground/70">
+                              No break
+                            </span>
+                          )}
                         </div>
                       </>
                     ) : (

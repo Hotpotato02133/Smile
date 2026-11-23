@@ -167,6 +167,12 @@ export function ClinicOverview() {
             Public Booking Portal
             <ExternalLink className="ml-1.5 size-3.5" />
           </Button>
+          <Button
+            variant="outline"
+            render={<Link href={buildHref("/admin/billing")} />}
+          >
+            Billing &amp; Invoices
+          </Button>
           <Button render={<Link href={buildHref("/admin/dentists")} />}>
             Manage Dentists
           </Button>
@@ -209,6 +215,7 @@ export function ClinicOverview() {
           usedLabel={formatBytes(clinic.storageUsedBytes)}
           limitLabel={formatBytes(plan?.maxStorageBytes ?? 0)}
           icon={HardDrive}
+          href={buildHref("/admin/billing")}
         />
         <QuotaCard
           title="Monthly Emails"
@@ -217,6 +224,7 @@ export function ClinicOverview() {
           usedLabel={clinic.currentMonthEmailCount.toLocaleString()}
           limitLabel={(plan?.maxEmailsPerMonth ?? 0).toLocaleString()}
           icon={Mail}
+          href={buildHref("/admin/billing")}
         />
       </div>
 

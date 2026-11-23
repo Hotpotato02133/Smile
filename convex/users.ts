@@ -304,12 +304,89 @@ export const ensureCurrentUser = mutation({
       .withIndex("by_clerk_id", (q) => q.eq("clerkId", clerkId))
       .unique();
 
+    const now = Date.now();
+    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
+
     if (existing) {
       if (!existing.isActive) {
         throw new ConvexError({
           code: "FORBIDDEN",
           message: "User account is deactivated.",
         });
+      }
+      const existingEmail = existing.email.trim().toLowerCase();
+      // Promote root Super Admin if SUPER_ADMIN_EMAIL was configured after sign-up
+      if (
+        superAdminEmail &&
+        existingEmail === superAdminEmail &&
+        existing.role !== "super_admin"
+      ) {
+        await ctx.db.patch(existing._id, {
+          role: "super_admin",
+          clinicId: undefined,
+        });
+        return { _id: existing._id, role: "super_admin" as const, clinicId: null };
+      }
+      // If an existing patient has a pending clinic staff invitation, auto-accept it
+      if (existing.role === "patient" && existingEmail) {
+        const invitations = await ctx.db
+          .query("staffInvitations")
+          .withIndex("by_email_and_status", (q) =>
+            q.eq("email", existingEmail).eq("status", "pending")
+          )
+          .collect();
+        let clinicInvite: (typeof invitations)[number] | undefined;
+        for (const inv of invitations) {
+          if (
+            inv.role !== "super_admin" &&
+            inv.clinicId !== undefined &&
+            inv.expiresAt >= now &&
+            (!clinicInvite || inv.createdAt > clinicInvite.createdAt)
+          ) {
+            clinicInvite = inv;
+          }
+        }
+        if (
+          clinicInvite &&
+          clinicInvite.clinicId &&
+          clinicInvite.role !== "super_admin"
+        ) {
+          await ctx.db.patch(existing._id, {
+            role: clinicInvite.role,
+            clinicId: clinicInvite.clinicId,
+          });
+          await ctx.db.patch(clinicInvite._id, {
+            status: "accepted",
+            respondedAt: now,
+          });
+          if (clinicInvite.role === "dentist") {
+            await ensureStarterDentistProfile(ctx, {
+              clinicId: clinicInvite.clinicId,
+              userId: existing._id,
+              firstName: existing.firstName,
+              lastName: existing.lastName,
+              now,
+            });
+          }
+          await recordAuditLog(ctx, {
+            actorUserId: existing._id,
+            actorRole: clinicInvite.role,
+            clinicId: clinicInvite.clinicId,
+            actionType: "ROLE_INVITATION_ACCEPTED",
+            targetEntity: "staffInvitations",
+            targetId: clinicInvite._id,
+            metadata: {
+              email: clinicInvite.email,
+              role: clinicInvite.role,
+              via: "ensure_current_user",
+            },
+          });
+          return {
+            _id: existing._id,
+            role: clinicInvite.role,
+            clinicId: clinicInvite.clinicId,
+          };
+        }
       }
       return {
         _id: existing._id,
@@ -318,9 +395,7 @@ export const ensureCurrentUser = mutation({
       };
     }
 
-    const now = Date.now();
     const email = (identity.email ?? "").trim().toLowerCase();
-    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
 
     // If an admin pre-created staff by email with a pending placeholder, claim that row
     const pendingByEmail = (

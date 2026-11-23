@@ -2,7 +2,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "convex/react";
-import { AlertTriangle, Armchair, Pencil, Plus } from "lucide-react";
+import { AlertTriangle, Armchair, Pencil, Plus, X } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -51,7 +52,7 @@ const chairSchema = z.object({
 type ChairFormValues = z.infer<typeof chairSchema>;
 
 export function ChairsManager() {
-  const { overrideClinicId, isReadOnly } = useClinicAdminContext();
+  const { overrideClinicId, isReadOnly, buildHref } = useClinicAdminContext();
   const workspace = useQuery(api.clinicAdmin.getClinicWorkspace, {
     overrideClinicId,
   });
@@ -64,6 +65,7 @@ export function ChairsManager() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingChair, setEditingChair] = useState<Doc<"chairs"> | null>(null);
   const [quotaBanner, setQuotaBanner] = useState<string | null>(null);
+  const [customTagInput, setCustomTagInput] = useState("");
 
   const form = useForm<ChairFormValues>({
     resolver: zodResolver(chairSchema),
@@ -137,11 +139,30 @@ export function ChairsManager() {
     }
   };
 
+  const addCustomTag = () => {
+    const cleaned = customTagInput.trim();
+    if (!cleaned) return;
+    if (
+      !selectedTags.some((t) => t.toLowerCase() === cleaned.toLowerCase())
+    ) {
+      form.setValue("tags", [...selectedTags, cleaned], {
+        shouldValidate: true,
+      });
+    }
+    setCustomTagInput("");
+  };
+
   const handleToggleActive = async (chairId: Id<"chairs">, isActive: boolean) => {
     try {
-      await toggleChairActive({ chairId, isActive });
+      const res = await toggleChairActive({ chairId, isActive });
       setQuotaBanner(null);
-      toast.success(isActive ? "Chair activated." : "Chair deactivated.");
+      if (!isActive && res.upcomingAppointmentsCount > 0) {
+        toast.warning(
+          `Chair deactivated, but ${res.upcomingAppointmentsCount} upcoming appointment(s) are assigned to it. Please reassign them in Front Desk.`
+        );
+      } else {
+        toast.success(isActive ? "Chair activated." : "Chair deactivated.");
+      }
     } catch (err) {
       const msg = getErrorMessage(err, "Could not update chair status.");
       if (getErrorCode(err) === "QUOTA_EXCEEDED") {
@@ -182,7 +203,17 @@ export function ChairsManager() {
         <Alert variant="destructive">
           <AlertTriangle className="size-4" />
           <AlertTitle>Plan Chair Quota Reached</AlertTitle>
-          <AlertDescription>{quotaBanner}</AlertDescription>
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+            <span>{quotaBanner}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              render={<Link href={buildHref("/admin/billing")} />}
+            >
+              View Plan &amp; Billing
+            </Button>
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -288,7 +319,7 @@ export function ChairsManager() {
             </div>
 
             <div className="space-y-2">
-              <Label>Supported Equipment & Procedure Tags</Label>
+              <Label>Supported Equipment &amp; Procedure Tags</Label>
               <div className="flex flex-wrap gap-2">
                 {PRESET_CHAIR_TAGS.map((tag) => {
                   const active = selectedTags.includes(tag);
@@ -305,6 +336,47 @@ export function ChairsManager() {
                     </Button>
                   );
                 })}
+                {selectedTags
+                  .filter(
+                    (t) =>
+                      !(PRESET_CHAIR_TAGS as readonly string[]).includes(t)
+                  )
+                  .map((customTag) => (
+                    <Button
+                      key={customTag}
+                      type="button"
+                      size="sm"
+                      variant="default"
+                      className="h-7 gap-1 text-xs"
+                      onClick={() => toggleTag(customTag)}
+                    >
+                      {customTag}
+                      <X className="size-3" />
+                    </Button>
+                  ))}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Input
+                  value={customTagInput}
+                  onChange={(e) => setCustomTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCustomTag();
+                    }
+                  }}
+                  placeholder="Add custom tag (e.g. CBCT, Laser)"
+                  className="h-8 text-xs"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  onClick={addCustomTag}
+                >
+                  Add Tag
+                </Button>
               </div>
               {form.formState.errors.tags ? (
                 <p className="text-xs text-destructive">

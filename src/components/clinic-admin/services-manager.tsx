@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "convex/react";
-import { Pencil, Plus, Sparkles } from "lucide-react";
+import { AlertTriangle, Pencil, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -77,6 +77,14 @@ type ServiceFormValues = z.output<typeof serviceSchema>;
 export function ServicesManager() {
   const { overrideClinicId, isReadOnly } = useClinicAdminContext();
   const services = useQuery(api.clinicAdmin.listServices, { overrideClinicId });
+  const chairs = useQuery(api.clinicAdmin.listChairs, { overrideClinicId });
+
+  const activeChairTags = new Set(
+    (chairs ?? [])
+      .filter((c) => c.isActive)
+      .flatMap((c) => c.supportedCategoryTags.map((t) => t.trim().toLowerCase()))
+  );
+  const hasChairData = chairs !== undefined;
 
   const createService = useMutation(api.clinicAdmin.createService);
   const updateService = useMutation(api.clinicAdmin.updateService);
@@ -309,9 +317,24 @@ export function ServicesManager() {
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {svc.requiredChairTag ? (
-                          <Badge variant="outline" className="text-[11px]">
-                            Chair: {svc.requiredChairTag}
-                          </Badge>
+                          <>
+                            <Badge variant="outline" className="text-[11px]">
+                              Chair: {svc.requiredChairTag}
+                            </Badge>
+                            {hasChairData &&
+                            !activeChairTags.has(
+                              svc.requiredChairTag.trim().toLowerCase()
+                            ) ? (
+                              <Badge
+                                variant="destructive"
+                                className="gap-1 text-[10px]"
+                                title="No active operatory chair has this equipment tag — patients will see zero available slots for this procedure."
+                              >
+                                <AlertTriangle className="size-3" />
+                                No matching chair
+                              </Badge>
+                            ) : null}
+                          </>
                         ) : (
                           <span className="text-xs text-muted-foreground">
                             Any chair
@@ -412,6 +435,11 @@ export function ServicesManager() {
                 placeholder="Ultrasonic scaling and polishing for plaque removal."
                 {...form.register("description")}
               />
+              {form.formState.errors.description ? (
+                <p className="text-xs text-destructive">
+                  {form.formState.errors.description.message}
+                </p>
+              ) : null}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -424,6 +452,11 @@ export function ServicesManager() {
                   className="font-mono"
                   {...form.register("durationMinutes")}
                 />
+                {form.formState.errors.durationMinutes ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.durationMinutes.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="svc-buf">Sterilization Buffer</Label>
@@ -434,6 +467,11 @@ export function ServicesManager() {
                   className="font-mono"
                   {...form.register("bufferMinutes")}
                 />
+                {form.formState.errors.bufferMinutes ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.bufferMinutes.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="svc-price">Base Price (PHP)</Label>
@@ -444,6 +482,11 @@ export function ServicesManager() {
                   className="font-mono"
                   {...form.register("pricePhp")}
                 />
+                {form.formState.errors.pricePhp ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.pricePhp.message}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -469,6 +512,15 @@ export function ServicesManager() {
                     <SelectItem value="Pediatric">Pediatric</SelectItem>
                   </SelectContent>
                 </Select>
+                {hasChairData &&
+                watchedChairTag &&
+                watchedChairTag !== "any" &&
+                !activeChairTags.has(watchedChairTag.trim().toLowerCase()) ? (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    Warning: No active chair currently has the &ldquo;
+                    {watchedChairTag}&rdquo; tag.
+                  </p>
+                ) : null}
               </div>
 
               <div className="flex items-center justify-between rounded-lg border px-3 py-2 sm:mt-5">
