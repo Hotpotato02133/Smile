@@ -80,19 +80,62 @@ export const saveClinicalFile = mutation({
     const clinic = await assertClinicCanWrite(ctx, access.clinicId, "storage");
     assertClinicFeatureEnabled(clinic, "xrayStorageEnabled");
 
+    const discardBlob = async () => {
+      try {
+        await ctx.storage.delete(args.storageId);
+      } catch {
+        // Blob may already be missing or deleted; safe to ignore during cleanup.
+      }
+    };
+
     const patient = await ctx.db.get(args.patientId);
     if (!patient || patient.clinicId !== clinic._id) {
+      await discardBlob();
       throw new ConvexError({
         code: "NOT_FOUND",
         message: "Patient does not belong to this clinic.",
       });
     }
 
-    if (args.sizeBytes <= 0 || args.sizeBytes > MAX_CLINICAL_FILE_BYTES) {
-      await ctx.storage.delete(args.storageId);
+    if (args.appointmentId) {
+      const appt = await ctx.db.get(args.appointmentId);
+      if (
+        !appt ||
+        appt.clinicId !== clinic._id ||
+        appt.patientId !== args.patientId
+      ) {
+        await discardBlob();
+        throw new ConvexError({
+          code: "NOT_FOUND",
+          message: "Linked appointment does not belong to this patient in this clinic.",
+        });
+      }
+    }
+
+    // Verify authoritative blob size from Convex `_storage` metadata (never trust client `sizeBytes`)
+    const storageMeta = await ctx.db.system.get("_storage", args.storageId);
+    if (!storageMeta) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Uploaded file could not be verified in storage. Please retry.",
+      });
+    }
+
+    const actualSizeBytes = storageMeta.size;
+    if (actualSizeBytes <= 0 || actualSizeBytes > MAX_CLINICAL_FILE_BYTES) {
+      await discardBlob();
       throw new ConvexError({
         code: "FILE_TOO_LARGE",
         message: "Uploaded file exceeded the 500 KB limit and was discarded.",
+      });
+    }
+
+    const plan = await ctx.db.get(clinic.planId);
+    if (plan && clinic.storageUsedBytes + actualSizeBytes > plan.maxStorageBytes) {
+      await discardBlob();
+      throw new ConvexError({
+        code: "QUOTA_EXCEEDED",
+        message: "Uploading this file would exceed your clinic's storage quota.",
       });
     }
 
@@ -104,17 +147,17 @@ export const saveClinicalFile = mutation({
       storageId: args.storageId,
       fileName: args.fileName.trim() || "clinical-image.webp",
       fileType: args.fileType,
-      sizeBytes: args.sizeBytes,
+      sizeBytes: actualSizeBytes,
       uploadedByUserId: access.user._id,
       createdAt: now,
     });
 
     await ctx.db.patch(clinic._id, {
-      storageUsedBytes: clinic.storageUsedBytes + args.sizeBytes,
+      storageUsedBytes: clinic.storageUsedBytes + actualSizeBytes,
       updatedAt: now,
     });
 
-    return { fileId };
+    return { fileId, sizeBytes: actualSizeBytes };
   },
 });
 

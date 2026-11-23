@@ -58,35 +58,42 @@ export const getPatientChart = query({
       });
     }
 
-    const [toothRecords, files, appointments, dentists] = await Promise.all([
-      ctx.db
-        .query("toothRecords")
-        .withIndex("by_clinic_and_patient_tooth", (q) =>
-          q.eq("clinicId", clinicId).eq("patientId", args.patientId)
-        )
-        .collect(),
-      ctx.db
-        .query("clinicalFiles")
-        .withIndex("by_clinic_and_patient", (q) =>
-          q.eq("clinicId", clinicId).eq("patientId", args.patientId)
-        )
-        .order("desc")
-        .take(50),
-      ctx.db
-        .query("appointments")
-        .withIndex("by_patient", (q) => q.eq("patientId", args.patientId))
-        .order("desc")
-        .take(25),
-      ctx.db
-        .query("dentists")
-        .withIndex("by_clinic", (q) =>
-          q.eq("clinicId", clinicId).eq("isActive", true)
-        )
-        .collect(),
-    ]);
+    const [toothRecords, files, appointments, activeDentists, inactiveDentists] =
+      await Promise.all([
+        ctx.db
+          .query("toothRecords")
+          .withIndex("by_clinic_and_patient_tooth", (q) =>
+            q.eq("clinicId", clinicId).eq("patientId", args.patientId)
+          )
+          .collect(),
+        ctx.db
+          .query("clinicalFiles")
+          .withIndex("by_clinic_and_patient", (q) =>
+            q.eq("clinicId", clinicId).eq("patientId", args.patientId)
+          )
+          .order("desc")
+          .take(50),
+        ctx.db
+          .query("appointments")
+          .withIndex("by_patient", (q) => q.eq("patientId", args.patientId))
+          .order("desc")
+          .take(25),
+        ctx.db
+          .query("dentists")
+          .withIndex("by_clinic", (q) =>
+            q.eq("clinicId", clinicId).eq("isActive", true)
+          )
+          .collect(),
+        ctx.db
+          .query("dentists")
+          .withIndex("by_clinic", (q) =>
+            q.eq("clinicId", clinicId).eq("isActive", false)
+          )
+          .collect(),
+      ]);
 
     const dentistMap = new Map<Id<"dentists">, Doc<"dentists">>(
-      dentists.map((d) => [d._id, d])
+      [...activeDentists, ...inactiveDentists].map((d) => [d._id, d])
     );
 
     const serviceIds = Array.from(new Set(appointments.map((a) => a.serviceId)));
@@ -180,36 +187,60 @@ export const recordToothCondition = mutation({
       });
     }
 
-    let recordedByDentistId: Id<"dentists"> | null = null;
-    if (args.dentistId) {
-      const provided = await ctx.db.get(args.dentistId);
-      if (provided && provided.clinicId === clinic._id) {
-        recordedByDentistId = provided._id;
-      }
-    }
-    if (!recordedByDentistId) {
-      const callerDentist = await ctx.db
-        .query("dentists")
-        .withIndex("by_user", (q) => q.eq("userId", access.user._id))
-        .unique();
-      if (callerDentist && callerDentist.clinicId === clinic._id) {
-        recordedByDentistId = callerDentist._id;
-      }
-    }
-    if (!recordedByDentistId) {
-      const fallbackDentist = await ctx.db
-        .query("dentists")
-        .withIndex("by_clinic", (q) =>
-          q.eq("clinicId", clinic._id).eq("isActive", true)
-        )
-        .first();
-      if (!fallbackDentist) {
+    if (args.appointmentId) {
+      const appt = await ctx.db.get(args.appointmentId);
+      if (
+        !appt ||
+        appt.clinicId !== clinic._id ||
+        appt.patientId !== args.patientId
+      ) {
         throw new ConvexError({
           code: "NOT_FOUND",
-          message: "No active dentist profile found in this clinic.",
+          message: "Linked appointment does not belong to this patient in this clinic.",
         });
       }
-      recordedByDentistId = fallbackDentist._id;
+    }
+
+    const callerDentist = await ctx.db
+      .query("dentists")
+      .withIndex("by_user", (q) => q.eq("userId", access.user._id))
+      .unique();
+
+    let recordedByDentistId: Id<"dentists"> | null = null;
+    if (access.user.role === "dentist") {
+      // Dentists always attribute clinical chart entries to their own verified profile.
+      if (!callerDentist || callerDentist.clinicId !== clinic._id) {
+        throw new ConvexError({
+          code: "NOT_FOUND",
+          message: "Your user account is not linked to an active dentist profile in this clinic.",
+        });
+      }
+      recordedByDentistId = callerDentist._id;
+    } else {
+      if (args.dentistId) {
+        const provided = await ctx.db.get(args.dentistId);
+        if (provided && provided.clinicId === clinic._id) {
+          recordedByDentistId = provided._id;
+        }
+      }
+      if (!recordedByDentistId && callerDentist && callerDentist.clinicId === clinic._id) {
+        recordedByDentistId = callerDentist._id;
+      }
+      if (!recordedByDentistId) {
+        const fallbackDentist = await ctx.db
+          .query("dentists")
+          .withIndex("by_clinic", (q) =>
+            q.eq("clinicId", clinic._id).eq("isActive", true)
+          )
+          .first();
+        if (!fallbackDentist) {
+          throw new ConvexError({
+            code: "NOT_FOUND",
+            message: "No active dentist profile found in this clinic.",
+          });
+        }
+        recordedByDentistId = fallbackDentist._id;
+      }
     }
 
     const recordId = await ctx.db.insert("toothRecords", {

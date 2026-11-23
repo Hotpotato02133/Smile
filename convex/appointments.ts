@@ -15,6 +15,7 @@ import {
   getDayOfWeekFromDateKey,
   getEmergencyBufferWindow,
   getLocalDateKeyAndMinute,
+  intervalsOverlap,
   parseDateKey,
   verifySpecificPairAvailable,
 } from "./lib/scheduling";
@@ -46,15 +47,33 @@ async function requireStaffWrite(
   return { ...access, clinic };
 }
 
-/** Computes `"YYYY-MM-DD"` + 6 months for automatic hygiene recall scheduling. */
+/** Computes `"YYYY-MM-DD"` + 6 months with safe month-end clamping (e.g. Aug 31 -> Feb 28/29). */
 function addSixMonthsDateKey(dateKey: string): string {
   const parsed = parseDateKey(dateKey);
   if (!parsed) return dateKey;
-  const dt = new Date(Date.UTC(parsed.year, parsed.month - 1 + 6, parsed.day));
-  const y = dt.getUTCFullYear();
-  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(dt.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  const targetMonthIndex = parsed.month - 1 + 6;
+  const targetYear = parsed.year + Math.floor(targetMonthIndex / 12);
+  const normalizedMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const maxDayInTargetMonth = new Date(
+    Date.UTC(targetYear, normalizedMonth + 1, 0)
+  ).getUTCDate();
+  const clampedDay = Math.min(parsed.day, maxDayInTargetMonth);
+  const m = String(normalizedMonth + 1).padStart(2, "0");
+  const d = String(clampedDay).padStart(2, "0");
+  return `${targetYear}-${m}-${d}`;
+}
+
+/** Matches oral prophylaxis / routine cleaning / hygiene procedures without false positives on exams. */
+function isHygieneCleaningService(service: Doc<"services"> | null): boolean {
+  if (!service) return false;
+  const lower = service.name.toLowerCase();
+  return (
+    lower.includes("prophylaxis") ||
+    lower.includes("cleaning") ||
+    lower.includes("scaling") ||
+    lower.includes("hygiene") ||
+    lower.includes("polish")
+  );
 }
 
 function hasCriticalMedicalAlert(patient: Doc<"patients">): boolean {
@@ -385,6 +404,8 @@ export const searchClinicPatients = query({
 export const getDentistQueue = query({
   args: {
     dateKey: v.string(),
+    rangeStartKey: v.optional(v.string()),
+    rangeEndKey: v.optional(v.string()),
     dentistId: v.optional(v.id("dentists")),
     overrideClinicId: v.optional(v.id("clinics")),
   },
@@ -392,51 +413,87 @@ export const getDentistQueue = query({
     const { user, clinic, clinicId, isSuperAdminOverride } =
       await requireClinicAccess(ctx, ["dentist", "clinic_admin"], args.overrideClinicId);
 
+    const startKey = args.rangeStartKey ?? args.dateKey;
+    const endKey = args.rangeEndKey ?? args.dateKey;
     const now = Date.now();
-    const [plan, activeDentists, myDentistProfile, dayAppointments, chairs, services] =
-      await Promise.all([
-        ctx.db.get(clinic.planId),
-        ctx.db
-          .query("dentists")
-          .withIndex("by_clinic", (q) =>
-            q.eq("clinicId", clinicId).eq("isActive", true)
-          )
-          .collect(),
-        ctx.db
-          .query("dentists")
-          .withIndex("by_user", (q) => q.eq("userId", user._id))
-          .unique(),
-        ctx.db
-          .query("appointments")
-          .withIndex("by_clinic_and_date", (q) =>
-            q.eq("clinicId", clinicId).eq("dateKey", args.dateKey)
-          )
-          .collect(),
-        ctx.db
-          .query("chairs")
-          .withIndex("by_clinic", (q) =>
-            q.eq("clinicId", clinicId).eq("isActive", true)
-          )
-          .collect(),
-        ctx.db
-          .query("services")
-          .withIndex("by_clinic_and_category", (q) => q.eq("clinicId", clinicId))
-          .collect(),
-      ]);
+    const canSwitchDentist = user.role === "clinic_admin" || isSuperAdminOverride;
 
-    const resolvedDentistId =
-      args.dentistId ??
-      (myDentistProfile && myDentistProfile.clinicId === clinicId
-        ? myDentistProfile._id
-        : activeDentists[0]?._id ?? null);
+    const [
+      plan,
+      activeDentists,
+      myDentistProfile,
+      rangeAppointments,
+      activeChairs,
+      inactiveChairs,
+      services,
+    ] = await Promise.all([
+      ctx.db.get(clinic.planId),
+      ctx.db
+        .query("dentists")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", true)
+        )
+        .collect(),
+      ctx.db
+        .query("dentists")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .unique(),
+      ctx.db
+        .query("appointments")
+        .withIndex("by_clinic_and_date", (q) =>
+          q
+            .eq("clinicId", clinicId)
+            .gte("dateKey", startKey)
+            .lte("dateKey", endKey)
+        )
+        .take(500),
+      ctx.db
+        .query("chairs")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", true)
+        )
+        .collect(),
+      ctx.db
+        .query("chairs")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", false)
+        )
+        .collect(),
+      ctx.db
+        .query("services")
+        .withIndex("by_clinic_and_category", (q) => q.eq("clinicId", clinicId))
+        .collect(),
+    ]);
 
-    const queueAppointments = dayAppointments
-      .filter(
-        (a) =>
-          a.status !== "cancelled" &&
-          (!resolvedDentistId || a.dentistId === resolvedDentistId)
-      )
-      .sort((a, b) => a.startTimeUtc - b.startTimeUtc);
+    const ownClinicDentist =
+      myDentistProfile && myDentistProfile.clinicId === clinicId
+        ? myDentistProfile
+        : null;
+
+    let resolvedDentistId: Id<"dentists"> | null = null;
+    if (canSwitchDentist) {
+      if (args.dentistId) {
+        const requested = await ctx.db.get(args.dentistId);
+        if (requested && requested.clinicId === clinicId) {
+          resolvedDentistId = requested._id;
+        }
+      }
+      if (!resolvedDentistId) {
+        resolvedDentistId = ownClinicDentist?._id ?? activeDentists[0]?._id ?? null;
+      }
+    } else {
+      // Dentists are strictly scoped to their own personal chair queue (never another doctor's).
+      resolvedDentistId = ownClinicDentist?._id ?? null;
+    }
+
+    const queueAppointments = resolvedDentistId
+      ? rangeAppointments
+          .filter(
+            (a) =>
+              a.status !== "cancelled" && a.dentistId === resolvedDentistId
+          )
+          .sort((a, b) => a.startTimeUtc - b.startTimeUtc)
+      : [];
 
     const patientIds = Array.from(
       new Set(queueAppointments.map((a) => a.patientId))
@@ -448,7 +505,9 @@ export const getDentistQueue = query({
         .filter((p): p is Doc<"patients"> => p !== null && p.clinicId === clinicId)
         .map((p) => [p._id, p])
     );
-    const chairMap = new Map(chairs.map((c) => [c._id, c]));
+    const chairMap = new Map(
+      [...activeChairs, ...inactiveChairs].map((c) => [c._id, c])
+    );
     const serviceMap = new Map(services.map((s) => [s._id, s]));
 
     const readOnlyState = getClinicReadOnlyState(
@@ -456,6 +515,12 @@ export const getDentistQueue = query({
       now,
       isSuperAdminOverride
     );
+
+    const visibleDentists = canSwitchDentist
+      ? activeDentists
+      : ownClinicDentist
+        ? [ownClinicDentist]
+        : [];
 
     return {
       user: {
@@ -468,10 +533,12 @@ export const getDentistQueue = query({
       clinic,
       plan,
       isSuperAdminOverride,
+      canSwitchDentist,
+      hasLinkedDentistProfile: Boolean(ownClinicDentist),
       isReadOnly: readOnlyState.isReadOnly,
       readOnlyReason: readOnlyState.readOnlyReason,
       selectedDentistId: resolvedDentistId,
-      dentists: activeDentists.map((d) => ({
+      dentists: visibleDentists.map((d) => ({
         _id: d._id,
         displayName: d.displayName,
         calendarColorHex: d.calendarColorHex,
@@ -718,6 +785,41 @@ export const transitionStatus = mutation({
       });
     }
 
+    // Only clinical staff (dentist / clinic_admin) may write private clinicalNotes
+    if (args.clinicalNotes !== undefined && actor.role === "receptionist") {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "Only dentists and clinic administrators may update private clinical notes.",
+      });
+    }
+
+    // Dentists may only transition status or record notes for their own assigned appointments
+    if (actor.role === "dentist") {
+      const callerDentist = await ctx.db
+        .query("dentists")
+        .withIndex("by_user", (q) => q.eq("userId", actor._id))
+        .unique();
+      if (!callerDentist || callerDentist.clinicId !== clinicId || appt.dentistId !== callerDentist._id) {
+        throw new ConvexError({
+          code: "FORBIDDEN",
+          message: "You can only update appointments assigned to your own chair queue.",
+        });
+      }
+    }
+
+    // Guard invalid transitions out of terminal cancelled state into active/completed clinical flow
+    if (
+      appt.status === "cancelled" &&
+      (args.status === "checked_in" ||
+        args.status === "in_chair" ||
+        args.status === "completed")
+    ) {
+      throw new ConvexError({
+        code: "INVALID_STATE",
+        message: "Cancelled appointments cannot be marked checked in, in chair, or completed.",
+      });
+    }
+
     const now = Date.now();
     const cleanReason = args.cancellationReason?.trim() || undefined;
     const windowHours = clinic.cancellationWindowHours ?? 24;
@@ -815,17 +917,13 @@ export const transitionStatus = mutation({
       }
     }
 
-    // Automatic 6-Month Hygiene Recall on Oral Prophylaxis / Preventive completion
-    if (args.status === "completed") {
+    // Automatic 6-Month Hygiene Recall on Oral Prophylaxis / Cleaning completion (idempotent on first completion)
+    if (args.status === "completed" && appt.status !== "completed") {
       const [service, patient] = await Promise.all([
         ctx.db.get(appt.serviceId),
         ctx.db.get(appt.patientId),
       ]);
-      const isCleaning =
-        service &&
-        (service.category === "Preventive" ||
-          service.name.toLowerCase().includes("prophylaxis") ||
-          service.name.toLowerCase().includes("cleaning"));
+      const isCleaning = isHygieneCleaningService(service);
 
       if (isCleaning && patient && patient.clinicId === clinicId) {
         const nextRecallDate = addSixMonthsDateKey(appt.dateKey);
@@ -835,6 +933,25 @@ export const transitionStatus = mutation({
         });
         hygieneRecallScheduledFor = nextRecallDate;
       }
+
+      await recordAuditLog(ctx, {
+        actorUserId: actor._id,
+        actorRole: actor.role,
+        clinicId,
+        actionType: "APPOINTMENT_COMPLETED",
+        targetEntity: "appointments",
+        targetId: appt._id,
+        metadata: {
+          serviceName: service?.name ?? null,
+          hygieneRecallScheduledFor,
+          hasClinicalNotes: Boolean(
+            (args.clinicalNotes ?? appt.clinicalNotes)?.trim()
+          ),
+          hasPostVisitInstructions: Boolean(
+            (args.postVisitInstructions ?? appt.postVisitInstructions)?.trim()
+          ),
+        },
+      });
     }
 
     // Check standby waitlist & schedule Resend opening blast on cancellation
@@ -1028,6 +1145,23 @@ export const updateClinicalNotes = mutation({
       });
     }
 
+    if (access.user.role === "dentist") {
+      const callerDentist = await ctx.db
+        .query("dentists")
+        .withIndex("by_user", (q) => q.eq("userId", access.user._id))
+        .unique();
+      if (
+        !callerDentist ||
+        callerDentist.clinicId !== clinicId ||
+        appt.dentistId !== callerDentist._id
+      ) {
+        throw new ConvexError({
+          code: "FORBIDDEN",
+          message: "You can only edit clinical notes for your own assigned appointments.",
+        });
+      }
+    }
+
     await ctx.db.patch(appt._id, {
       clinicalNotes: args.clinicalNotes.trim() || undefined,
       postVisitInstructions: args.postVisitInstructions.trim() || undefined,
@@ -1197,5 +1331,372 @@ export const updateWaitlistStatus = mutation({
     }
     await ctx.db.patch(entry._id, { status: args.status });
     return { waitlistId: entry._id, status: args.status };
+  },
+});
+
+// ============================================================================
+// 4. DENTIST PERSONAL TIME-OFF & BREAK BLOCKER (WITH OVERLAP DETECTION)
+// ============================================================================
+
+const MAX_TIME_OFF_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
+const APPOINTMENT_LOOKBACK_MS = 12 * 60 * 60 * 1000;
+
+async function findOverlappingAppointmentsForTimeOff(
+  ctx: { db: MutationCtx["db"] } | { db: import("./_generated/server").QueryCtx["db"] },
+  params: {
+    clinicId: Id<"clinics">;
+    dentistId: Id<"dentists">;
+    startTimeUtc: number;
+    endTimeUtc: number;
+  }
+) {
+  const candidates = await ctx.db
+    .query("appointments")
+    .withIndex("by_dentist_and_start", (q) =>
+      q
+        .eq("dentistId", params.dentistId)
+        .gte("startTimeUtc", params.startTimeUtc - APPOINTMENT_LOOKBACK_MS)
+        .lt("startTimeUtc", params.endTimeUtc)
+    )
+    .take(200);
+
+  return candidates.filter(
+    (a) =>
+      a.clinicId === params.clinicId &&
+      a.status !== "cancelled" &&
+      a.status !== "no_show" &&
+      a.status !== "completed" &&
+      intervalsOverlap(
+        a.startTimeUtc,
+        a.endTimeUtc,
+        params.startTimeUtc,
+        params.endTimeUtc
+      )
+  );
+}
+
+/** Lists a dentist's scheduled time-off & break blocks (dentists strictly see their own). */
+export const getDentistTimeOff = query({
+  args: {
+    dentistId: v.optional(v.id("dentists")),
+    overrideClinicId: v.optional(v.id("clinics")),
+  },
+  handler: async (ctx, args) => {
+    const { user, clinicId, isSuperAdminOverride } = await requireClinicAccess(
+      ctx,
+      ["dentist", "clinic_admin"],
+      args.overrideClinicId
+    );
+
+    const canSwitchDentist = user.role === "clinic_admin" || isSuperAdminOverride;
+    const myDentistProfile = await ctx.db
+      .query("dentists")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .unique();
+
+    let targetDentist: Doc<"dentists"> | null = null;
+    if (canSwitchDentist && args.dentistId) {
+      const requested = await ctx.db.get(args.dentistId);
+      if (requested && requested.clinicId === clinicId) {
+        targetDentist = requested;
+      }
+    }
+    if (!targetDentist && myDentistProfile && myDentistProfile.clinicId === clinicId) {
+      targetDentist = myDentistProfile;
+    }
+    if (!targetDentist && canSwitchDentist) {
+      targetDentist = await ctx.db
+        .query("dentists")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", true)
+        )
+        .first();
+    }
+
+    if (!targetDentist) {
+      return { dentistId: null, dentistName: null, blocks: [] };
+    }
+
+    const rows = await ctx.db
+      .query("dentistTimeOff")
+      .withIndex("by_dentist_and_time", (q) =>
+        q.eq("dentistId", targetDentist._id)
+      )
+      .order("desc")
+      .take(100);
+
+    return {
+      dentistId: targetDentist._id,
+      dentistName: targetDentist.displayName,
+      blocks: rows
+        .filter((r) => r.clinicId === clinicId)
+        .sort((a, b) => a.startTimeUtc - b.startTimeUtc),
+    };
+  },
+});
+
+/** Live overlap preview: checks whether a proposed leave/break conflicts with existing appointments. */
+export const checkTimeOffConflicts = query({
+  args: {
+    dentistId: v.optional(v.id("dentists")),
+    startTimeUtc: v.number(),
+    endTimeUtc: v.number(),
+    overrideClinicId: v.optional(v.id("clinics")),
+  },
+  handler: async (ctx, args) => {
+    const { user, clinicId, isSuperAdminOverride } = await requireClinicAccess(
+      ctx,
+      ["dentist", "clinic_admin"],
+      args.overrideClinicId
+    );
+
+    if (args.endTimeUtc <= args.startTimeUtc) {
+      return { conflicts: [] };
+    }
+
+    const canSwitchDentist = user.role === "clinic_admin" || isSuperAdminOverride;
+    const myDentistProfile = await ctx.db
+      .query("dentists")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .unique();
+
+    let targetDentistId: Id<"dentists"> | null = null;
+    if (canSwitchDentist && args.dentistId) {
+      const requested = await ctx.db.get(args.dentistId);
+      if (requested && requested.clinicId === clinicId) {
+        targetDentistId = requested._id;
+      }
+    } else if (myDentistProfile && myDentistProfile.clinicId === clinicId) {
+      targetDentistId = myDentistProfile._id;
+    }
+
+    if (!targetDentistId) {
+      return { conflicts: [] };
+    }
+
+    const overlapping = await findOverlappingAppointmentsForTimeOff(ctx, {
+      clinicId,
+      dentistId: targetDentistId,
+      startTimeUtc: args.startTimeUtc,
+      endTimeUtc: args.endTimeUtc,
+    });
+
+    const patientIds = Array.from(new Set(overlapping.map((a) => a.patientId)));
+    const serviceIds = Array.from(new Set(overlapping.map((a) => a.serviceId)));
+    const [patients, services] = await Promise.all([
+      Promise.all(patientIds.map((id) => ctx.db.get(id))),
+      Promise.all(serviceIds.map((id) => ctx.db.get(id))),
+    ]);
+
+    const patientMap = new Map(
+      patients
+        .filter((p): p is Doc<"patients"> => p !== null && p.clinicId === clinicId)
+        .map((p) => [p._id, p])
+    );
+    const serviceMap = new Map(
+      services
+        .filter((s): s is Doc<"services"> => s !== null && s.clinicId === clinicId)
+        .map((s) => [s._id, s])
+    );
+
+    return {
+      conflicts: overlapping
+        .sort((a, b) => a.startTimeUtc - b.startTimeUtc)
+        .map((appt) => {
+          const patient = patientMap.get(appt.patientId);
+          const service = serviceMap.get(appt.serviceId);
+          return {
+            _id: appt._id,
+            referenceCode: `SML-${appt._id.slice(-6).toUpperCase()}`,
+            patientName: patient
+              ? `${patient.firstName} ${patient.lastName}`
+              : "Patient",
+            serviceName: service?.name ?? "Dental Procedure",
+            dateKey: appt.dateKey,
+            startTimeUtc: appt.startTimeUtc,
+            endTimeUtc: appt.endTimeUtc,
+            status: appt.status,
+          };
+        }),
+    };
+  },
+});
+
+/** Allows dentists (for themselves) or clinic admins to block leave, conferences, or ad-hoc breaks. */
+export const createMyTimeOff = mutation({
+  args: {
+    dentistId: v.optional(v.id("dentists")),
+    startTimeUtc: v.number(),
+    endTimeUtc: v.number(),
+    reason: v.string(),
+    allowOverlap: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const access = await requireClinicAccess(ctx, ["dentist", "clinic_admin"]);
+    if (access.isSuperAdminOverride || access.user.role === "super_admin") {
+      throw new ConvexError({
+        code: "READ_ONLY_IMPERSONATION",
+        message: "Super Admin View-As-Clinic mode is strictly read-only.",
+      });
+    }
+    await assertClinicCanWrite(ctx, access.clinicId, "staff");
+    const clinicId = access.clinicId;
+
+    if (
+      !Number.isFinite(args.startTimeUtc) ||
+      !Number.isFinite(args.endTimeUtc) ||
+      args.endTimeUtc <= args.startTimeUtc
+    ) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Time-off end time must be after the start time.",
+      });
+    }
+    if (args.endTimeUtc - args.startTimeUtc > MAX_TIME_OFF_WINDOW_MS) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Time-off block cannot exceed 365 days.",
+      });
+    }
+
+    const myDentistProfile = await ctx.db
+      .query("dentists")
+      .withIndex("by_user", (q) => q.eq("userId", access.user._id))
+      .unique();
+
+    let targetDentist: Doc<"dentists"> | null = null;
+    if (access.user.role === "dentist") {
+      if (!myDentistProfile || myDentistProfile.clinicId !== clinicId) {
+        throw new ConvexError({
+          code: "NOT_FOUND",
+          message:
+            "Your account is not linked to a dentist profile in this clinic.",
+        });
+      }
+      targetDentist = myDentistProfile;
+    } else if (args.dentistId) {
+      const requested = await ctx.db.get(args.dentistId);
+      if (!requested || requested.clinicId !== clinicId) {
+        throw new ConvexError({
+          code: "NOT_FOUND",
+          message: "Dentist profile not found in this clinic.",
+        });
+      }
+      targetDentist = requested;
+    } else if (myDentistProfile && myDentistProfile.clinicId === clinicId) {
+      targetDentist = myDentistProfile;
+    }
+
+    if (!targetDentist) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Select a dentist profile before blocking time off.",
+      });
+    }
+
+    const overlapping = await findOverlappingAppointmentsForTimeOff(ctx, {
+      clinicId,
+      dentistId: targetDentist._id,
+      startTimeUtc: args.startTimeUtc,
+      endTimeUtc: args.endTimeUtc,
+    });
+
+    if (overlapping.length > 0 && !args.allowOverlap) {
+      throw new ConvexError({
+        code: "TIME_OFF_APPOINTMENT_CONFLICT",
+        message: `This time-off block overlaps ${overlapping.length} existing appointment${overlapping.length === 1 ? "" : "s"}. Confirm the overlap warning to block this window and notify front desk to reschedule.`,
+      });
+    }
+
+    const reason = args.reason.trim() || "Personal time off";
+    const timeOffId = await ctx.db.insert("dentistTimeOff", {
+      clinicId,
+      dentistId: targetDentist._id,
+      startTimeUtc: args.startTimeUtc,
+      endTimeUtc: args.endTimeUtc,
+      reason,
+      createdByUserId: access.user._id,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: access.user._id,
+      actorRole: access.user.role,
+      clinicId,
+      actionType: "DENTIST_TIME_OFF_CREATED",
+      targetEntity: "dentistTimeOff",
+      targetId: timeOffId,
+      metadata: {
+        dentistId: targetDentist._id,
+        startTimeUtc: args.startTimeUtc,
+        endTimeUtc: args.endTimeUtc,
+        reason,
+        overlappingAppointmentCount: overlapping.length,
+      },
+    });
+
+    return {
+      timeOffId,
+      overlappingCount: overlapping.length,
+    };
+  },
+});
+
+/** Allows a dentist (for their own blocks) or clinic admin to remove a time-off block. */
+export const removeMyTimeOff = mutation({
+  args: { timeOffId: v.id("dentistTimeOff") },
+  handler: async (ctx, args) => {
+    const access = await requireClinicAccess(ctx, ["dentist", "clinic_admin"]);
+    if (access.isSuperAdminOverride || access.user.role === "super_admin") {
+      throw new ConvexError({
+        code: "READ_ONLY_IMPERSONATION",
+        message: "Super Admin View-As-Clinic mode is strictly read-only.",
+      });
+    }
+    await assertClinicCanWrite(ctx, access.clinicId, "staff");
+    const clinicId = access.clinicId;
+
+    const row = await ctx.db.get(args.timeOffId);
+    if (!row || row.clinicId !== clinicId) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Time-off block not found.",
+      });
+    }
+
+    if (access.user.role === "dentist") {
+      const myDentistProfile = await ctx.db
+        .query("dentists")
+        .withIndex("by_user", (q) => q.eq("userId", access.user._id))
+        .unique();
+      if (
+        !myDentistProfile ||
+        myDentistProfile.clinicId !== clinicId ||
+        row.dentistId !== myDentistProfile._id
+      ) {
+        throw new ConvexError({
+          code: "FORBIDDEN",
+          message: "You can only remove your own time-off blocks.",
+        });
+      }
+    }
+
+    await ctx.db.delete(row._id);
+
+    await recordAuditLog(ctx, {
+      actorUserId: access.user._id,
+      actorRole: access.user.role,
+      clinicId,
+      actionType: "DENTIST_TIME_OFF_DELETED",
+      targetEntity: "dentistTimeOff",
+      targetId: row._id,
+      metadata: {
+        dentistId: row.dentistId,
+        startTimeUtc: row.startTimeUtc,
+        endTimeUtc: row.endTimeUtc,
+        reason: row.reason,
+      },
+    });
+
+    return { deleted: true };
   },
 });

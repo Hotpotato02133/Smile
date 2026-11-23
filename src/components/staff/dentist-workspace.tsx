@@ -4,8 +4,12 @@ import { UserButton } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import {
   AlertOctagon,
+  AlertTriangle,
   ArrowLeft,
+  BellRing,
   CalendarCheck2,
+  CalendarDays,
+  CalendarOff,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -13,6 +17,8 @@ import {
   Eye,
   FileImage,
   FileText,
+  Globe,
+  Lock,
   Save,
   ShieldAlert,
   ShieldCheck,
@@ -21,11 +27,20 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import {
+  Component,
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { Odontogram } from "@/components/clinical/odontogram";
 import { XrayVault } from "@/components/clinical/xray-vault";
 import { useEnvConfig } from "@/components/providers/app-providers";
+import { TimeOffBlockerDialog } from "@/components/staff/time-off-blocker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,51 +60,139 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatDateTime, getErrorMessage } from "@/lib/format";
+import {
+  formatDateTime,
+  formatShortDateKey,
+  formatTimeInTimeZone,
+  getErrorMessage,
+  getTodayDateKeyInTimeZone,
+} from "@/lib/format";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-function toLocalDateKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+type QueueViewMode = "day" | "week";
 
-function addDays(date: Date, delta: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + delta);
-  return next;
-}
+type NoteDraft = {
+  clinicalNotes: string;
+  postVisitInstructions: string;
+};
 
-function addSixMonthsToDateKey(dateKey: string): string {
+function addDaysToDateKey(dateKey: string, delta: number): string {
   const [y, m, d] = dateKey.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1 + 6, d));
+  if (!y || !m || !d) return dateKey;
+  const dt = new Date(Date.UTC(y, m - 1, d + delta));
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
 }
 
-function formatTimeOnly(ms: number): string {
+/** Returns Monday–Sunday range keys for the calendar week containing `dateKey`. */
+function getWeekRangeForDateKey(dateKey: string): {
+  startKey: string;
+  endKey: string;
+} {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  if (!y || !m || !d) return { startKey: dateKey, endKey: dateKey };
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dayOfWeek = dt.getUTCDay(); // 0=Sun..6=Sat
+  const offsetToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const startKey = addDaysToDateKey(dateKey, offsetToMonday);
+  const endKey = addDaysToDateKey(startKey, 6);
+  return { startKey, endKey };
+}
+
+/** Safe month-end clamped `"YYYY-MM-DD"` + 6 months (e.g. Aug 31 -> Feb 28/29). */
+function addSixMonthsToDateKey(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  if (!y || !m || !d) return dateKey;
+  const targetMonthIndex = m - 1 + 6;
+  const targetYear = y + Math.floor(targetMonthIndex / 12);
+  const normalizedMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const maxDay = new Date(
+    Date.UTC(targetYear, normalizedMonth + 1, 0)
+  ).getUTCDate();
+  const clampedDay = Math.min(d, maxDay);
+  return `${targetYear}-${String(normalizedMonth + 1).padStart(2, "0")}-${String(clampedDay).padStart(2, "0")}`;
+}
+
+function formatDayHeading(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  if (!y || !m || !d) return dateKey;
   return new Intl.DateTimeFormat("en-PH", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(ms));
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+class StaffWorkspaceErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="mx-auto flex w-full max-w-2xl flex-1 items-center p-6">
+          <Alert variant="destructive">
+            <ShieldAlert className="size-4" />
+            <AlertTitle>Unable to load Dentist Clinical Workspace</AlertTitle>
+            <AlertDescription className="space-y-3">
+              <p>
+                {getErrorMessage(
+                  this.state.error,
+                  "You may not have dentist or clinic admin permissions for this workspace."
+                )}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => this.setState({ error: null })}
+                >
+                  Retry
+                </Button>
+                <Button
+                  size="sm"
+                  render={<Link href="/post-login" />}
+                >
+                  Return to My Workspace
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function VisitNotesEditor({
   appointmentId,
-  initialClinicalNotes,
-  initialPostVisit,
+  clinicalNotes,
+  postVisitInstructions,
+  isDirty,
   isReadOnly,
+  onChange,
+  onSaved,
 }: {
   appointmentId: Id<"appointments">;
-  initialClinicalNotes: string;
-  initialPostVisit: string;
+  clinicalNotes: string;
+  postVisitInstructions: string;
+  isDirty: boolean;
   isReadOnly: boolean;
+  onChange: (next: NoteDraft) => void;
+  onSaved: () => void;
 }) {
   const updateNotes = useMutation(api.appointments.updateClinicalNotes);
-  const [clinicalNotes, setClinicalNotes] = useState(initialClinicalNotes);
-  const [postVisitInstructions, setPostVisitInstructions] =
-    useState(initialPostVisit);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -101,7 +204,8 @@ function VisitNotesEditor({
         clinicalNotes,
         postVisitInstructions,
       });
-      toast.success("Clinical notes saved.");
+      onSaved();
+      toast.success("Clinical notes & aftercare instructions saved.");
     } catch (err) {
       toast.error(getErrorMessage(err, "Could not save clinical notes."));
     } finally {
@@ -112,35 +216,79 @@ function VisitNotesEditor({
   return (
     <form onSubmit={handleSave} className="space-y-4">
       <div className="space-y-1.5">
-        <Label htmlFor="clin-notes">Chairside Clinical Notes (SOAP / Procedure)</Label>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Label htmlFor="clin-notes">
+            Chairside Clinical Notes (SOAP / Procedure)
+          </Label>
+          <Badge
+            variant="secondary"
+            className="gap-1 text-[10px] font-medium"
+          >
+            <Lock className="size-3" />
+            Private · Staff-Only
+          </Badge>
+        </div>
         <textarea
           id="clin-notes"
           rows={4}
           disabled={isReadOnly}
           className="flex w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-60"
-          placeholder="Record anesthesia used, restorative material, occlusion check, and clinical observations…"
+          placeholder="Record anesthesia used, restorative material, occlusion check, and private clinical observations…"
           value={clinicalNotes}
-          onChange={(e) => setClinicalNotes(e.target.value)}
+          onChange={(e) =>
+            onChange({
+              clinicalNotes: e.target.value,
+              postVisitInstructions,
+            })
+          }
         />
+        <p className="text-[11px] text-muted-foreground">
+          Strictly hidden from the patient portal. Visible only to authorized
+          clinic clinicians.
+        </p>
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="post-visit">Patient Post-Visit Instructions</Label>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Label htmlFor="post-visit">Patient Post-Visit Instructions</Label>
+          <Badge
+            variant="outline"
+            className="gap-1 border-sky-500/40 bg-sky-500/10 text-[10px] font-medium text-sky-800 dark:text-sky-200"
+          >
+            <Globe className="size-3" />
+            Patient-Visible · Shown in Portal
+          </Badge>
+        </div>
         <textarea
           id="post-visit"
           rows={3}
           disabled={isReadOnly}
           className="flex w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-60"
-          placeholder="e.g., Avoid hot beverages for 2 hours; take ibuprofen if mild soreness occurs."
+          placeholder="e.g., Avoid hot beverages for 2 hours; rinse gently with warm saltwater; take ibuprofen if mild soreness occurs."
           value={postVisitInstructions}
-          onChange={(e) => setPostVisitInstructions(e.target.value)}
+          onChange={(e) =>
+            onChange({
+              clinicalNotes,
+              postVisitInstructions: e.target.value,
+            })
+          }
         />
+        <p className="text-[11px] text-muted-foreground">
+          Displayed to the patient in their Smile portal after this visit.
+        </p>
       </div>
 
-      <Button type="submit" disabled={isReadOnly || saving}>
-        <Save className="mr-1.5 size-4" />
-        {saving ? "Saving…" : "Save Visit Notes"}
-      </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button type="submit" disabled={isReadOnly || saving}>
+          <Save className="mr-1.5 size-4" />
+          {saving ? "Saving…" : "Save Visit Notes"}
+        </Button>
+        {isDirty ? (
+          <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+            Unsaved changes (also saved automatically on Complete Visit)
+          </span>
+        ) : null}
+      </div>
     </form>
   );
 }
@@ -150,24 +298,75 @@ function ConnectedDentistWorkspace({
 }: {
   overrideClinicId?: Id<"clinics">;
 }) {
-  const [selectedDate, setSelectedDate] = useState<Date>(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  });
+  const [viewMode, setViewMode] = useState<QueueViewMode>("day");
+  const [dateKey, setDateKey] = useState<string>(() =>
+    getTodayDateKeyInTimeZone("Asia/Manila")
+  );
   const [pickedDentistId, setPickedDentistId] = useState<
     Id<"dentists"> | undefined
   >(undefined);
   const [pickedAppointmentId, setPickedAppointmentId] =
     useState<Id<"appointments"> | null>(null);
+  const [timeOffDialogOpen, setTimeOffDialogOpen] = useState(false);
+  const [draftsByAppt, setDraftsByAppt] = useState<Record<string, NoteDraft>>(
+    {}
+  );
+  const [nowRef] = useState<number>(() => Date.now());
 
-  const dateKey = useMemo(() => toLocalDateKey(selectedDate), [selectedDate]);
+  const weekRange = useMemo(() => getWeekRangeForDateKey(dateKey), [dateKey]);
+  const rangeStartKey = viewMode === "week" ? weekRange.startKey : dateKey;
+  const rangeEndKey = viewMode === "week" ? weekRange.endKey : dateKey;
 
   const queueData = useQuery(api.appointments.getDentistQueue, {
     dateKey,
+    rangeStartKey,
+    rangeEndKey,
     dentistId: pickedDentistId,
     overrideClinicId,
   });
+
+  const timeOffSummary = useQuery(
+    api.appointments.getDentistTimeOff,
+    queueData?.selectedDentistId
+      ? {
+          dentistId: queueData.selectedDentistId,
+          overrideClinicId,
+        }
+      : "skip"
+  );
+
+  // Real-time arrival notification detector when Front Desk moves a patient to Checked In / In Chair
+  const prevStatusRef = useRef<Map<string, string>>(new Map());
+  const prevScopeRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!queueData) return;
+    const scopeKey = `${queueData.selectedDentistId ?? "none"}:${rangeStartKey}:${rangeEndKey}`;
+    const nextMap = new Map<string, string>();
+    for (const item of queueData.queue) {
+      nextMap.set(item._id, item.status);
+    }
+
+    if (prevScopeRef.current === scopeKey) {
+      for (const item of queueData.queue) {
+        const previous = prevStatusRef.current.get(item._id);
+        if (previous && previous !== item.status) {
+          if (item.status === "checked_in") {
+            toast.info(
+              `Patient Checked In: ${item.patientName} has arrived for ${item.serviceName}.`
+            );
+          } else if (item.status === "in_chair") {
+            toast.success(
+              `Patient Seated: ${item.patientName} is now In Chair (${item.chairRoomCode || item.chairName}).`
+            );
+          }
+        }
+      }
+    }
+
+    prevScopeRef.current = scopeKey;
+    prevStatusRef.current = nextMap;
+  }, [queueData, rangeStartKey, rangeEndKey]);
 
   const activeAppointment = useMemo(() => {
     if (!queueData || queueData.queue.length === 0) return null;
@@ -195,15 +394,62 @@ function ConnectedDentistWorkspace({
   const transitionStatus = useMutation(api.appointments.transitionStatus);
   const setPatientRecallDate = useMutation(api.odontogram.setPatientRecallDate);
 
+  const activeDraft: NoteDraft = useMemo(() => {
+    if (!activeAppointment) {
+      return { clinicalNotes: "", postVisitInstructions: "" };
+    }
+    const existing = draftsByAppt[activeAppointment._id];
+    if (existing) return existing;
+    return {
+      clinicalNotes: activeAppointment.clinicalNotes ?? "",
+      postVisitInstructions: activeAppointment.postVisitInstructions ?? "",
+    };
+  }, [activeAppointment, draftsByAppt]);
+
+  const isNotesDirty = Boolean(
+    activeAppointment &&
+      draftsByAppt[activeAppointment._id] &&
+      (activeDraft.clinicalNotes !== (activeAppointment.clinicalNotes ?? "") ||
+        activeDraft.postVisitInstructions !==
+          (activeAppointment.postVisitInstructions ?? ""))
+  );
+
+  const clearDraftForAppointment = (appointmentId: Id<"appointments">) => {
+    setDraftsByAppt((prev) => {
+      if (!(appointmentId in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[appointmentId];
+      return copy;
+    });
+  };
+
   const handleChairStatus = async (
     appointmentId: Id<"appointments">,
     status: "in_chair" | "completed"
   ) => {
     try {
-      const res = await transitionStatus({ appointmentId, status });
+      const draft = draftsByAppt[appointmentId];
+      const payload: {
+        appointmentId: Id<"appointments">;
+        status: "in_chair" | "completed";
+        clinicalNotes?: string;
+        postVisitInstructions?: string;
+      } = { appointmentId, status };
+
+      // Atomically persist any unsaved clinical notes / aftercare instructions on visit completion
+      if (status === "completed" && draft) {
+        payload.clinicalNotes = draft.clinicalNotes;
+        payload.postVisitInstructions = draft.postVisitInstructions;
+      }
+
+      const res = await transitionStatus(payload);
+      if (status === "completed" && draft) {
+        clearDraftForAppointment(appointmentId);
+      }
+
       if (res.hygieneRecallScheduledFor) {
         toast.success(
-          `Visit completed! 6-month hygiene recall scheduled for ${res.hygieneRecallScheduledFor}.`
+          `Visit completed! 6-month hygiene recall automatically set for ${res.hygieneRecallScheduledFor}.`
         );
       } else {
         toast.success(`Appointment marked ${status.replace("_", " ")}.`);
@@ -213,12 +459,15 @@ function ConnectedDentistWorkspace({
     }
   };
 
-  const handleOneClickRecall = async (patientId: Id<"patients">) => {
-    const nextRecallDate = addSixMonthsToDateKey(dateKey);
+  const handleOneClickRecall = async (
+    patientId: Id<"patients">,
+    visitDateKey: string
+  ) => {
+    const nextRecallDate = addSixMonthsToDateKey(visitDateKey);
     try {
       await setPatientRecallDate({
         patientId,
-        lastCleaningDate: dateKey,
+        lastCleaningDate: visitDateKey,
         nextRecallDate,
       });
       toast.success(`6-month hygiene recall set for ${nextRecallDate}.`);
@@ -235,10 +484,21 @@ function ConnectedDentistWorkspace({
     );
   }
 
-  const { clinic, isReadOnly, isSuperAdminOverride } = queueData;
+  const { clinic, plan, isReadOnly, readOnlyReason, isSuperAdminOverride } =
+    queueData;
+  const clinicTimeZone = clinic.timezone || "Asia/Manila";
   const inChairCount = queueData.queue.filter(
     (q) => q.status === "in_chair"
   ).length;
+  const checkedInCount = queueData.queue.filter(
+    (q) => q.status === "checked_in"
+  ).length;
+  const upcomingTimeOffCount = (timeOffSummary?.blocks ?? []).filter(
+    (b) => b.endTimeUtc >= nowRef
+  ).length;
+
+  const canAccessFrontDesk =
+    queueData.user.role === "clinic_admin" || isSuperAdminOverride;
 
   const buildViewHref = (base: string) =>
     overrideClinicId
@@ -254,9 +514,25 @@ function ConnectedDentistWorkspace({
         medicalHistory.dentalAnxietyLevel === "severe")
   );
 
+  // Group queue cards by dateKey when in Weekly view
+  const groupedQueue = (() => {
+    const groups: { dateKey: string; items: typeof queueData.queue }[] = [];
+    for (const item of queueData.queue) {
+      const existing = groups.find((g) => g.dateKey === item.dateKey);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        groups.push({ dateKey: item.dateKey, items: [item] });
+      }
+    }
+    return groups;
+  })();
+
+  const stepAmount = viewMode === "week" ? 7 : 1;
+
   return (
     <div className="flex min-h-screen flex-1 flex-col bg-background">
-      {/* Impersonation & Read-Only Banners */}
+      {/* Impersonation, Past-Due & Read-Only Banners */}
       {isSuperAdminOverride ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-500/30 bg-sky-500/10 px-6 py-2 text-xs text-sky-900 dark:text-sky-200">
           <span className="inline-flex items-center gap-2">
@@ -276,13 +552,24 @@ function ConnectedDentistWorkspace({
         </div>
       ) : null}
 
-      {clinic.status === "suspended" || clinic.status === "archived" ? (
+      {clinic.status === "past_due" && !isReadOnly ? (
+        <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-6 py-2 text-xs text-amber-900 dark:text-amber-200">
+          <AlertTriangle className="size-4 shrink-0" />
+          <span>
+            <strong>Subscription Renewal Needed (Grace Period):</strong>{" "}
+            Clinical charting remains active during the 3-day grace window.
+            Please notify your Clinic Admin to renew the plan.
+          </span>
+        </div>
+      ) : null}
+
+      {isReadOnly && !isSuperAdminOverride ? (
         <div className="flex items-center gap-2 border-b border-rose-500/30 bg-rose-500/10 px-6 py-2 text-xs text-rose-900 dark:text-rose-200">
           <ShieldAlert className="size-4 shrink-0" />
           <span>
-            <strong>Read-Only Clinical Mode ({clinic.status}):</strong> Existing
-            patient charts, odontograms, and X-rays remain viewable for clinical
-            continuity, while new writes are paused until subscription renewal.
+            <strong>Read-Only Clinical Mode:</strong>{" "}
+            {readOnlyReason ??
+              "Existing patient charts, odontograms, and X-rays remain viewable for clinical continuity, while new writes are paused until subscription renewal."}
           </span>
         </div>
       ) : null}
@@ -297,24 +584,31 @@ function ConnectedDentistWorkspace({
             <Stethoscope className="size-4" />
           </span>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-sm font-semibold leading-tight">
                 {clinic.name} · Clinical Workspace
               </h1>
               {inChairCount > 0 ? (
                 <Badge className="animate-pulse bg-emerald-600 text-[11px] text-white">
-                  {inChairCount} Patient In Chair
+                  {inChairCount} In Chair
+                </Badge>
+              ) : null}
+              {checkedInCount > 0 ? (
+                <Badge className="gap-1 bg-indigo-600 text-[11px] text-white">
+                  <BellRing className="size-3" />
+                  {checkedInCount} Checked In
                 </Badge>
               ) : null}
             </div>
             <p className="text-xs text-muted-foreground">
-              Chair queue, 32-tooth SVG odontogram & compressed X-ray vault
+              Chair queue, 32-tooth SVG odontogram, compressed X-ray vault &amp;
+              time-off blocker
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {queueData.dentists.length > 1 ? (
+          {queueData.canSwitchDentist && queueData.dentists.length > 1 ? (
             <Select
               value={queueData.selectedDentistId ?? ""}
               onValueChange={(v) => {
@@ -334,12 +628,32 @@ function ConnectedDentistWorkspace({
             </Select>
           ) : null}
 
+          {/* Day / Week Toggle */}
+          <div className="inline-flex items-center rounded-lg border p-0.5">
+            <Button
+              size="xs"
+              variant={viewMode === "day" ? "default" : "ghost"}
+              onClick={() => setViewMode("day")}
+            >
+              Day
+            </Button>
+            <Button
+              size="xs"
+              variant={viewMode === "week" ? "default" : "ghost"}
+              onClick={() => setViewMode("week")}
+            >
+              <CalendarDays className="mr-1 size-3" />
+              Week
+            </Button>
+          </div>
+
+          {/* Date / Week Stepper */}
           <div className="flex items-center rounded-lg border">
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="Previous day"
-              onClick={() => setSelectedDate((d) => addDays(d, -1))}
+              aria-label={viewMode === "week" ? "Previous week" : "Previous day"}
+              onClick={() => setDateKey((k) => addDaysToDateKey(k, -stepAmount))}
             >
               <ChevronLeft className="size-4" />
             </Button>
@@ -347,31 +661,50 @@ function ConnectedDentistWorkspace({
               size="sm"
               variant="ghost"
               className="font-mono text-xs"
-              onClick={() => {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                setSelectedDate(today);
-              }}
+              title="Jump to today"
+              onClick={() =>
+                setDateKey(getTodayDateKeyInTimeZone(clinicTimeZone))
+              }
             >
-              {dateKey}
+              {viewMode === "week"
+                ? `${formatShortDateKey(weekRange.startKey)} – ${formatShortDateKey(weekRange.endKey)}`
+                : dateKey}
             </Button>
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="Next day"
-              onClick={() => setSelectedDate((d) => addDays(d, 1))}
+              aria-label={viewMode === "week" ? "Next week" : "Next day"}
+              onClick={() => setDateKey((k) => addDaysToDateKey(k, stepAmount))}
             >
               <ChevronRight className="size-4" />
             </Button>
           </div>
 
-          <Button
-            size="sm"
-            variant="outline"
-            render={<Link href={buildViewHref("/front-desk")} />}
-          >
-            Front Desk
-          </Button>
+          {queueData.selectedDentistId ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setTimeOffDialogOpen(true)}
+            >
+              <CalendarOff className="mr-1.5 size-3.5" />
+              Time Off
+              {upcomingTimeOffCount > 0 ? (
+                <Badge variant="secondary" className="ml-1.5 px-1.5 text-[10px]">
+                  {upcomingTimeOffCount}
+                </Badge>
+              ) : null}
+            </Button>
+          ) : null}
+
+          {canAccessFrontDesk ? (
+            <Button
+              size="sm"
+              variant="outline"
+              render={<Link href={buildViewHref("/front-desk")} />}
+            >
+              Front Desk
+            </Button>
+          ) : null}
           <UserButton />
         </div>
       </header>
@@ -381,77 +714,122 @@ function ConnectedDentistWorkspace({
         {/* Left: My Chair Queue */}
         <aside className="space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">My Chair Queue</h2>
+            <h2 className="text-sm font-semibold">
+              {viewMode === "week" ? "Weekly Chair Queue" : "My Chair Queue"}
+            </h2>
             <Badge variant="outline" className="font-mono">
               {queueData.queue.length}
             </Badge>
           </div>
 
-          {queueData.queue.length === 0 ? (
+          {queueData.user.role === "dentist" &&
+          !queueData.hasLinkedDentistProfile ? (
+            <Alert>
+              <AlertTriangle className="size-4" />
+              <AlertTitle>Dentist profile not linked</AlertTitle>
+              <AlertDescription className="text-xs">
+                Your account does not have an active dentist schedule profile in{" "}
+                <strong>{clinic.name}</strong> yet. Ask your Clinic Admin to
+                link your email under <code>/admin/dentists</code>.
+              </AlertDescription>
+            </Alert>
+          ) : queueData.queue.length === 0 ? (
             <Card>
               <CardContent className="py-10 text-center text-xs text-muted-foreground">
-                No appointments scheduled for {dateKey}.
+                No appointments scheduled for{" "}
+                {viewMode === "week"
+                  ? `${formatShortDateKey(weekRange.startKey)} – ${formatShortDateKey(weekRange.endKey)}`
+                  : dateKey}
+                .
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-2">
-              {queueData.queue.map((item) => {
-                const isSelected = activeAppointment?._id === item._id;
-                const isInChair = item.status === "in_chair";
-                return (
-                  <button
-                    key={item._id}
-                    type="button"
-                    onClick={() => setPickedAppointmentId(item._id)}
-                    className={`w-full rounded-xl border p-3 text-left transition-all ${
-                      isSelected
-                        ? "border-primary bg-accent/60 shadow-xs"
-                        : "bg-card hover:bg-accent/30"
-                    } ${
-                      isInChair
-                        ? "ring-2 ring-emerald-500/60"
-                        : ""
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold leading-tight">
-                          {item.patientName}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {item.serviceName}
-                        </p>
-                      </div>
-                      <span className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
-                        <Clock className="size-3" />
-                        {formatTimeOnly(item.startTimeUtc)}
-                      </span>
+            <div className="space-y-3">
+              {groupedQueue.map((group) => (
+                <div key={group.dateKey} className="space-y-2">
+                  {viewMode === "week" ? (
+                    <div className="flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <span>{formatDayHeading(group.dateKey)}</span>
+                      <span className="font-mono">{group.items.length}</span>
                     </div>
+                  ) : null}
 
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <Badge
-                        variant={isInChair ? "default" : "secondary"}
-                        className={`text-[10px] capitalize ${
-                          isInChair ? "bg-emerald-600 text-white" : ""
+                  {group.items.map((item) => {
+                    const isSelected = activeAppointment?._id === item._id;
+                    const isInChair = item.status === "in_chair";
+                    const isCheckedIn = item.status === "checked_in";
+                    return (
+                      <button
+                        key={item._id}
+                        type="button"
+                        onClick={() => setPickedAppointmentId(item._id)}
+                        className={`w-full rounded-xl border p-3 text-left transition-all ${
+                          isSelected
+                            ? "border-primary bg-accent/60 shadow-xs"
+                            : "bg-card hover:bg-accent/30"
+                        } ${
+                          isInChair
+                            ? "ring-2 ring-emerald-500/70"
+                            : isCheckedIn
+                              ? "ring-2 ring-indigo-500/60"
+                              : ""
                         }`}
                       >
-                        {item.status.replace("_", " ")}
-                      </Badge>
-                      <Badge variant="outline" className="font-mono text-[10px]">
-                        {item.chairRoomCode || item.chairName}
-                      </Badge>
-                      {item.hasMedicalAlert ? (
-                        <Badge
-                          variant="destructive"
-                          className="text-[10px]"
-                        >
-                          Med Alert
-                        </Badge>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })}
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold leading-tight">
+                              {item.patientName}
+                            </p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {item.serviceName}
+                            </p>
+                          </div>
+                          <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
+                            <Clock className="size-3" />
+                            {formatTimeInTimeZone(
+                              item.startTimeUtc,
+                              clinicTimeZone
+                            )}
+                          </span>
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <Badge
+                            variant={
+                              isInChair || isCheckedIn ? "default" : "secondary"
+                            }
+                            className={`text-[10px] capitalize ${
+                              isInChair
+                                ? "bg-emerald-600 text-white"
+                                : isCheckedIn
+                                  ? "bg-indigo-600 text-white"
+                                  : ""
+                            }`}
+                          >
+                            {isCheckedIn
+                              ? "Checked In · Waiting"
+                              : item.status.replace("_", " ")}
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className="font-mono text-[10px]"
+                          >
+                            {item.chairRoomCode || item.chairName}
+                          </Badge>
+                          {item.hasMedicalAlert ? (
+                            <Badge
+                              variant="destructive"
+                              className="text-[10px]"
+                            >
+                              Med Alert
+                            </Badge>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           )}
         </aside>
@@ -515,7 +893,7 @@ function ConnectedDentistWorkspace({
               {/* Patient Summary & Chair Controls */}
               <Card>
                 <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
+                  <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <CardTitle className="text-xl">
                         {patientChart.patient.firstName}{" "}
@@ -524,33 +902,76 @@ function ConnectedDentistWorkspace({
                       <Badge variant="outline" className="font-mono text-xs">
                         {activeAppointment.referenceCode}
                       </Badge>
-                      <Badge variant="secondary" className="capitalize">
+                      <Badge
+                        variant={
+                          activeAppointment.status === "in_chair" ||
+                          activeAppointment.status === "checked_in"
+                            ? "default"
+                            : "secondary"
+                        }
+                        className={`capitalize ${
+                          activeAppointment.status === "in_chair"
+                            ? "bg-emerald-600 text-white"
+                            : activeAppointment.status === "checked_in"
+                              ? "bg-indigo-600 text-white"
+                              : ""
+                        }`}
+                      >
                         {activeAppointment.status.replace("_", " ")}
                       </Badge>
                     </div>
-                    <CardDescription className="mt-1">
+                    <CardDescription>
                       DOB: {patientChart.patient.dateOfBirth} ·{" "}
                       {patientChart.patient.phone} ·{" "}
                       <strong>{activeAppointment.serviceName}</strong> (
-                      {activeAppointment.chairName})
+                      {activeAppointment.chairName}) ·{" "}
+                      {activeAppointment.dateKey}{" "}
+                      {formatTimeInTimeZone(
+                        activeAppointment.startTimeUtc,
+                        clinicTimeZone
+                      )}
                     </CardDescription>
                     {activeAppointment.chiefComplaint ? (
-                      <p className="mt-1.5 text-xs text-foreground/85">
+                      <p className="text-xs text-foreground/85">
                         <strong>Chief Complaint:</strong>{" "}
                         {activeAppointment.chiefComplaint}
                       </p>
                     ) : null}
+                    {medicalHistory &&
+                    (medicalHistory.conditions.length > 0 ||
+                      medicalHistory.notes) ? (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-xs">
+                        {medicalHistory.conditions.length > 0 ? (
+                          <span className="text-muted-foreground">
+                            <strong>Conditions:</strong>{" "}
+                            {medicalHistory.conditions.join(", ")}
+                          </span>
+                        ) : null}
+                        {medicalHistory.notes ? (
+                          <span className="text-muted-foreground">
+                            · <strong>Medical Notes:</strong>{" "}
+                            {medicalHistory.notes}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {patientChart.patient.nextRecallDate ? (
-                      <p className="mt-1 inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+                      <p className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
                         <CalendarCheck2 className="size-3.5" />
                         Next 6-Month Hygiene Recall:{" "}
                         {patientChart.patient.nextRecallDate}
+                        {patientChart.patient.lastCleaningDate
+                          ? ` (Last cleaning: ${patientChart.patient.lastCleaningDate})`
+                          : ""}
                       </p>
                     ) : null}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    {!isReadOnly && activeAppointment.status !== "in_chair" && activeAppointment.status !== "completed" ? (
+                    {!isReadOnly &&
+                    activeAppointment.status !== "in_chair" &&
+                    activeAppointment.status !== "completed" &&
+                    activeAppointment.status !== "cancelled" ? (
                       <Button
                         size="sm"
                         variant="outline"
@@ -561,7 +982,9 @@ function ConnectedDentistWorkspace({
                         Start In Chair
                       </Button>
                     ) : null}
-                    {!isReadOnly && activeAppointment.status !== "completed" ? (
+                    {!isReadOnly &&
+                    activeAppointment.status !== "completed" &&
+                    activeAppointment.status !== "cancelled" ? (
                       <Button
                         size="sm"
                         onClick={() =>
@@ -577,7 +1000,10 @@ function ConnectedDentistWorkspace({
                         size="sm"
                         variant="outline"
                         onClick={() =>
-                          handleOneClickRecall(patientChart.patient._id)
+                          handleOneClickRecall(
+                            patientChart.patient._id,
+                            activeAppointment.dateKey
+                          )
                         }
                       >
                         <Sparkles className="mr-1.5 size-3.5" />
@@ -597,11 +1023,17 @@ function ConnectedDentistWorkspace({
                   </TabsTrigger>
                   <TabsTrigger value="xrays" className="gap-1.5">
                     <FileImage className="size-3.5" />
-                    X-Rays & Photos ({patientChart.files.length})
+                    X-Rays &amp; Photos ({patientChart.files.length})
                   </TabsTrigger>
                   <TabsTrigger value="notes" className="gap-1.5">
                     <FileText className="size-3.5" />
-                    Visit Notes & History
+                    Visit Notes &amp; History
+                    {isNotesDirty ? (
+                      <span
+                        className="size-1.5 rounded-full bg-amber-500"
+                        title="Unsaved visit notes"
+                      />
+                    ) : null}
                   </TabsTrigger>
                 </TabsList>
 
@@ -623,6 +1055,8 @@ function ConnectedDentistWorkspace({
                     files={patientChart.files}
                     enabled={patientChart.xrayStorageEnabled}
                     isReadOnly={isReadOnly}
+                    storageUsedBytes={clinic.storageUsedBytes}
+                    maxStorageBytes={plan?.maxStorageBytes}
                   />
                 </TabsContent>
 
@@ -633,21 +1067,28 @@ function ConnectedDentistWorkspace({
                         Current Visit Clinical Notes
                       </CardTitle>
                       <CardDescription>
-                        Document procedure details and patient aftercare
-                        instructions.
+                        Document private chairside procedure notes and
+                        patient-visible post-visit aftercare instructions.
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <VisitNotesEditor
-                        key={`${activeAppointment._id}-${activeAppointment.updatedAt}`}
                         appointmentId={activeAppointment._id}
-                        initialClinicalNotes={
-                          activeAppointment.clinicalNotes ?? ""
+                        clinicalNotes={activeDraft.clinicalNotes}
+                        postVisitInstructions={
+                          activeDraft.postVisitInstructions
                         }
-                        initialPostVisit={
-                          activeAppointment.postVisitInstructions ?? ""
-                        }
+                        isDirty={isNotesDirty}
                         isReadOnly={isReadOnly}
+                        onChange={(next) =>
+                          setDraftsByAppt((prev) => ({
+                            ...prev,
+                            [activeAppointment._id]: next,
+                          }))
+                        }
+                        onSaved={() =>
+                          clearDraftForAppointment(activeAppointment._id)
+                        }
                       />
                     </CardContent>
                   </Card>
@@ -655,26 +1096,46 @@ function ConnectedDentistWorkspace({
                   <Card>
                     <CardHeader>
                       <CardTitle className="text-base">
-                        Past Clinic Visits ({patientChart.recentAppointments.length})
+                        Past Clinic Visits (
+                        {patientChart.recentAppointments.length})
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-2">
                       {patientChart.recentAppointments.map((visit) => (
                         <div
                           key={visit._id}
-                          className="rounded-lg border p-3 text-xs"
+                          className="space-y-1.5 rounded-lg border p-3 text-xs"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="font-semibold">
                               {visit.serviceName} · {visit.dentistName}
                             </span>
-                            <span className="text-muted-foreground">
-                              {formatDateTime(visit.startTimeUtc)}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <Badge
+                                variant="secondary"
+                                className="text-[10px] capitalize"
+                              >
+                                {visit.status.replace("_", " ")}
+                              </Badge>
+                              <span className="text-muted-foreground">
+                                {formatDateTime(visit.startTimeUtc)}
+                              </span>
+                            </div>
                           </div>
                           {visit.clinicalNotes ? (
-                            <p className="mt-1 text-foreground/85">
+                            <p className="text-foreground/85">
+                              <span className="font-semibold text-muted-foreground">
+                                Private Note:{" "}
+                              </span>
                               {visit.clinicalNotes}
+                            </p>
+                          ) : null}
+                          {visit.postVisitInstructions ? (
+                            <p className="text-sky-900 dark:text-sky-200">
+                              <span className="font-semibold">
+                                Patient Aftercare:{" "}
+                              </span>
+                              {visit.postVisitInstructions}
                             </p>
                           ) : null}
                         </div>
@@ -687,6 +1148,19 @@ function ConnectedDentistWorkspace({
           )}
         </section>
       </main>
+
+      {/* Personal Time-Off & Break Blocker Dialog */}
+      {queueData.selectedDentistId ? (
+        <TimeOffBlockerDialog
+          open={timeOffDialogOpen}
+          onOpenChange={setTimeOffDialogOpen}
+          dentistId={queueData.selectedDentistId}
+          clinicTimezone={clinicTimeZone}
+          defaultDateKey={dateKey}
+          isReadOnly={isReadOnly}
+          overrideClinicId={overrideClinicId}
+        />
+      ) : null}
     </div>
   );
 }
@@ -702,18 +1176,25 @@ function StaffSearchResolver() {
       <main className="mx-auto flex w-full max-w-2xl flex-1 items-center p-6">
         <Alert>
           <ShieldCheck className="size-4" />
-          <AlertTitle>Connect Clerk & Convex to activate Dentist Workspace</AlertTitle>
+          <AlertTitle>
+            Connect Clerk &amp; Convex to activate Dentist Workspace
+          </AlertTitle>
           <AlertDescription>
             Configure <code>.env.local</code> and run{" "}
             <code>npx convex dev</code> to open the dentist chair queue,
-            32-tooth SVG odontogram, and compressed X-ray vault.
+            32-tooth SVG odontogram, compressed X-ray vault, and time-off
+            blocker.
           </AlertDescription>
         </Alert>
       </main>
     );
   }
 
-  return <ConnectedDentistWorkspace overrideClinicId={overrideClinicId} />;
+  return (
+    <StaffWorkspaceErrorBoundary>
+      <ConnectedDentistWorkspace overrideClinicId={overrideClinicId} />
+    </StaffWorkspaceErrorBoundary>
+  );
 }
 
 export function DentistWorkspace() {

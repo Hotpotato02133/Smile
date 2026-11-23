@@ -6,14 +6,21 @@ import {
   DAY_MS,
   generateInviteToken,
   recordAuditLog,
-  toManilaDateKey,
+  toManilaMonthKey,
 } from "./lib/audit";
 import {
   assertClinicCanWrite,
   assertClinicFeatureEnabled,
   type ClinicResourceType,
+  getClinicReadOnlyState,
   requireClinicAccess,
 } from "./lib/permissions";
+import {
+  getDayOfWeekFromDateKey,
+  getLocalDateKeyAndMinute,
+  localDateMinuteToUtc,
+  parseDateKey,
+} from "./lib/scheduling";
 import { DEFAULT_SERVICE_CATALOG } from "./lib/serviceCatalog";
 
 const weeklyScheduleDayValidator = v.object({
@@ -43,6 +50,17 @@ const serviceCategoryValidator = v.union(
 );
 
 const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_LOGO_BYTES = 500 * 1024;
+
+function isValidIanaTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Guard for all Clinic Admin write mutations: blocks Super Admin read-only impersonation and enforces Law #4/quotas. */
 async function requireClinicAdminWrite(
@@ -76,13 +94,22 @@ function validateWeeklySchedule(
       message: "Weekly schedule must include all 7 days (Sunday through Saturday).",
     });
   }
+  const seenDays = new Set<number>();
   for (const day of schedule) {
-    if (day.dayOfWeek < 0 || day.dayOfWeek > 6) {
+    if (!Number.isInteger(day.dayOfWeek) || day.dayOfWeek < 0 || day.dayOfWeek > 6) {
       throw new ConvexError({
         code: "INVALID_INPUT",
-        message: "Day of week must be between 0 (Sun) and 6 (Sat).",
+        message: "Day of week must be an integer between 0 (Sun) and 6 (Sat).",
       });
     }
+    if (seenDays.has(day.dayOfWeek)) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Weekly schedule cannot contain duplicate days of the week.",
+      });
+    }
+    seenDays.add(day.dayOfWeek);
+
     if (!day.isWorking) continue;
     if (
       day.startMinute < 0 ||
@@ -92,6 +119,14 @@ function validateWeeklySchedule(
       throw new ConvexError({
         code: "INVALID_INPUT",
         message: "Shift end time must be after start time (00:00–23:59).",
+      });
+    }
+    const hasBreakStart = day.breakStartMinute !== undefined;
+    const hasBreakEnd = day.breakEndMinute !== undefined;
+    if (hasBreakStart !== hasBreakEnd) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Specify both break start and break end times, or disable the break.",
       });
     }
     if (
@@ -112,8 +147,69 @@ function validateWeeklySchedule(
   }
 }
 
+function validateOperatingHours(
+  hours: {
+    dayOfWeek: number;
+    isOpen: boolean;
+    openMinute: number;
+    closeMinute: number;
+  }[]
+) {
+  if (hours.length !== 7) {
+    throw new ConvexError({
+      code: "INVALID_INPUT",
+      message: "Operating hours must specify all 7 days of the week.",
+    });
+  }
+  const seenDays = new Set<number>();
+  for (const day of hours) {
+    if (!Number.isInteger(day.dayOfWeek) || day.dayOfWeek < 0 || day.dayOfWeek > 6) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Operating day must be an integer between 0 (Sun) and 6 (Sat).",
+      });
+    }
+    if (seenDays.has(day.dayOfWeek)) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Operating hours cannot contain duplicate days of the week.",
+      });
+    }
+    seenDays.add(day.dayOfWeek);
+    if (!day.isOpen) continue;
+    if (
+      day.openMinute < 0 ||
+      day.closeMinute > 1439 ||
+      day.closeMinute <= day.openMinute
+    ) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Closing time must be after opening time (00:00–23:59) for open days.",
+      });
+    }
+  }
+}
+
+function listDateKeysBetween(startKey: string, endKey: string): string[] {
+  const start = parseDateKey(startKey);
+  const end = parseDateKey(endKey);
+  if (!start || !end) return [];
+  const startMs = Date.UTC(start.year, start.month - 1, start.day);
+  const endMs = Date.UTC(end.year, end.month - 1, end.day);
+  if (endMs < startMs) return [];
+  const out: string[] = [];
+  for (let ms = startMs; ms <= endMs && out.length < 120; ms += DAY_MS) {
+    const d = new Date(ms);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${day}`);
+  }
+  return out;
+}
+
 // ============================================================================
-// 1. WORKSPACE OVERVIEW & LOCAL REPORTS
+// 1. WORKSPACE OVERVIEW, BILLING & LOCAL REPORTS
 // ============================================================================
 
 export const getClinicWorkspace = query({
@@ -190,11 +286,20 @@ export const getClinicWorkspace = query({
           a.targetAudience === "clinic_admins_only")
     );
 
-    const isReadOnly =
-      isSuperAdminOverride ||
-      clinic.status === "suspended" ||
-      clinic.status === "archived" ||
-      (clinic.status === "trial" && now > clinic.subscriptionEndsAt);
+    const readOnlyState = getClinicReadOnlyState(
+      clinic,
+      now,
+      isSuperAdminOverride
+    );
+
+    const currentMonthKey = toManilaMonthKey(now);
+    const isCurrentMonth = clinic.currentMonthKey === currentMonthKey;
+    const effectiveMonthlyAppointments = isCurrentMonth
+      ? clinic.currentMonthAppointmentCount
+      : 0;
+    const effectiveMonthlyEmails = isCurrentMonth
+      ? clinic.currentMonthEmailCount
+      : 0;
 
     return {
       user: {
@@ -204,11 +309,16 @@ export const getClinicWorkspace = query({
         lastName: user.lastName,
         role: user.role,
       },
-      clinic,
+      clinic: {
+        ...clinic,
+        currentMonthAppointmentCount: effectiveMonthlyAppointments,
+        currentMonthEmailCount: effectiveMonthlyEmails,
+      },
       plan,
       logoUrl,
       isSuperAdminOverride,
-      isReadOnly,
+      isReadOnly: readOnlyState.isReadOnly,
+      readOnlyReason: readOnlyState.readOnlyReason,
       announcements: visibleAnnouncements,
       counts: {
         activeDentists: activeDentists.length,
@@ -224,28 +334,203 @@ export const getClinicWorkspace = query({
   },
 });
 
+export const getClinicBillingSummary = query({
+  args: { overrideClinicId: v.optional(v.id("clinics")) },
+  handler: async (ctx, args) => {
+    const { clinic, clinicId, isSuperAdminOverride } =
+      await requireClinicAccess(ctx, ["clinic_admin"], args.overrideClinicId);
+
+    const now = Date.now();
+    const [currentPlan, allPlans, paymentRows] = await Promise.all([
+      ctx.db.get(clinic.planId),
+      ctx.db.query("subscriptionPlans").take(25),
+      ctx.db
+        .query("subscriptionPayments")
+        .withIndex("by_clinic", (q) => q.eq("clinicId", clinicId))
+        .order("desc")
+        .take(50),
+    ]);
+
+    const planMap = new Map<Id<"subscriptionPlans">, Doc<"subscriptionPlans">>(
+      allPlans.map((p) => [p._id, p])
+    );
+
+    const availablePlans: Doc<"subscriptionPlans">[] = [];
+    for (const p of allPlans) {
+      if (p.isActive || p._id === clinic.planId) {
+        availablePlans.push(p);
+      }
+    }
+    availablePlans.sort((a, b) => a.monthlyPricePhp - b.monthlyPricePhp);
+
+    const payments = await Promise.all(
+      paymentRows.map(async (payment) => {
+        const plan = planMap.get(payment.planId);
+        const receiptUrl = payment.receiptStorageId
+          ? await ctx.storage.getUrl(payment.receiptStorageId)
+          : null;
+        return {
+          ...payment,
+          planName: plan?.name ?? "Subscription Plan",
+          planCode: plan?.code ?? "starter",
+          receiptUrl,
+        };
+      })
+    );
+
+    const readOnlyState = getClinicReadOnlyState(
+      clinic,
+      now,
+      isSuperAdminOverride
+    );
+
+    const currentMonthKey = toManilaMonthKey(now);
+    const isCurrentMonth = clinic.currentMonthKey === currentMonthKey;
+
+    return {
+      clinic: {
+        ...clinic,
+        currentMonthAppointmentCount: isCurrentMonth
+          ? clinic.currentMonthAppointmentCount
+          : 0,
+        currentMonthEmailCount: isCurrentMonth
+          ? clinic.currentMonthEmailCount
+          : 0,
+      },
+      currentPlan,
+      availablePlans,
+      payments,
+      isReadOnly: readOnlyState.isReadOnly,
+      readOnlyReason: readOnlyState.readOnlyReason,
+    };
+  },
+});
+
 export const getClinicDailyMetrics = query({
   args: {
     overrideClinicId: v.optional(v.id("clinics")),
     days: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAccess(
+    const { clinic, clinicId } = await requireClinicAccess(
       ctx,
       ["clinic_admin"],
       args.overrideClinicId
     );
 
+    const now = Date.now();
+    const timeZone = clinic.timezone || "Asia/Manila";
     const days = Math.min(Math.max(args.days ?? 30, 7), 90);
-    const startKey = toManilaDateKey(Date.now() - (days - 1) * DAY_MS);
+    const todayKey = getLocalDateKeyAndMinute(now, timeZone).dateKey;
+    const startKey = getLocalDateKeyAndMinute(
+      now - (days - 1) * DAY_MS,
+      timeZone
+    ).dateKey;
 
-    const rows = await ctx.db
-      .query("clinicMetricsDaily")
-      .withIndex("by_clinic_and_date", (q) =>
-        q.eq("clinicId", clinicId).gte("dateKey", startKey)
-      )
-      .order("asc")
-      .collect();
+    const rangeStartUtc = localDateMinuteToUtc(startKey, 0, timeZone);
+    const rangeEndUtc = localDateMinuteToUtc(todayKey, 1439, timeZone) + 60_000;
+
+    const [
+      metricRows,
+      rangeAppointments,
+      clinicServices,
+      activeDentists,
+      inactiveDentists,
+      timeOffRows,
+    ] = await Promise.all([
+      ctx.db
+        .query("clinicMetricsDaily")
+        .withIndex("by_clinic_and_date", (q) =>
+          q.eq("clinicId", clinicId).gte("dateKey", startKey)
+        )
+        .order("asc")
+        .take(120),
+      ctx.db
+        .query("appointments")
+        .withIndex("by_clinic_and_date", (q) =>
+          q
+            .eq("clinicId", clinicId)
+            .gte("dateKey", startKey)
+            .lte("dateKey", todayKey)
+        )
+        .take(2000),
+      ctx.db
+        .query("services")
+        .withIndex("by_clinic_and_category", (q) => q.eq("clinicId", clinicId))
+        .take(200),
+      ctx.db
+        .query("dentists")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", true)
+        )
+        .take(100),
+      ctx.db
+        .query("dentists")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", false)
+        )
+        .take(100),
+      ctx.db
+        .query("dentistTimeOff")
+        .withIndex("by_clinic_and_time", (q) =>
+          q
+            .eq("clinicId", clinicId)
+            .gte("startTimeUtc", rangeStartUtc - 30 * DAY_MS)
+            .lte("startTimeUtc", rangeEndUtc)
+        )
+        .take(300),
+    ]);
+
+    const serviceMap = new Map<Id<"services">, Doc<"services">>(
+      clinicServices.map((s) => [s._id, s])
+    );
+
+    // Build rows from pre-aggregated `clinicMetricsDaily` and include live today snapshot
+    // if the daily midnight cron has not closed out today yet.
+    const rows = metricRows.map((r) => ({
+      dateKey: r.dateKey,
+      totalBooked: r.totalBooked,
+      completedCount: r.completedCount,
+      cancelledCount: r.cancelledCount,
+      noShowCount: r.noShowCount,
+      estimatedRevenuePhp: r.estimatedRevenuePhp,
+      newPatientsCount: r.newPatientsCount,
+    }));
+
+    let includesLiveToday = false;
+    const hasTodayRow = rows.some((r) => r.dateKey === todayKey);
+    let todayBooked = 0;
+    let todayCompleted = 0;
+    let todayCancelled = 0;
+    let todayNoShow = 0;
+    let todayRevenue = 0;
+
+    if (!hasTodayRow) {
+      for (const appt of rangeAppointments) {
+        if (appt.dateKey !== todayKey) continue;
+        todayBooked++;
+        if (appt.status === "completed") {
+          todayCompleted++;
+          todayRevenue += serviceMap.get(appt.serviceId)?.pricePhp ?? 0;
+        } else if (appt.status === "cancelled") {
+          todayCancelled++;
+        } else if (appt.status === "no_show") {
+          todayNoShow++;
+        }
+      }
+      if (todayBooked > 0) {
+        rows.push({
+          dateKey: todayKey,
+          totalBooked: todayBooked,
+          completedCount: todayCompleted,
+          cancelledCount: todayCancelled,
+          noShowCount: todayNoShow,
+          estimatedRevenuePhp: todayRevenue,
+          newPatientsCount: 0,
+        });
+        includesLiveToday = true;
+      }
+    }
 
     const totals = rows.reduce(
       (acc, r) => ({
@@ -266,7 +551,208 @@ export const getClinicDailyMetrics = query({
       }
     );
 
-    return { rows, totals };
+    const completionRate =
+      totals.totalBooked > 0
+        ? Math.round((totals.completedCount / totals.totalBooked) * 1000) / 10
+        : 0;
+    const noShowRate =
+      totals.totalBooked > 0
+        ? Math.round((totals.noShowCount / totals.totalBooked) * 1000) / 10
+        : 0;
+    const cancellationRate =
+      totals.totalBooked > 0
+        ? Math.round((totals.cancelledCount / totals.totalBooked) * 1000) / 10
+        : 0;
+
+    // Top Services breakdown across the selected date window
+    const serviceAgg = new Map<
+      Id<"services">,
+      {
+        serviceId: Id<"services">;
+        name: string;
+        category: string;
+        bookingCount: number;
+        completedCount: number;
+        noShowCount: number;
+        estimatedRevenuePhp: number;
+      }
+    >();
+
+    for (const appt of rangeAppointments) {
+      const svc = serviceMap.get(appt.serviceId);
+      const entry = serviceAgg.get(appt.serviceId) ?? {
+        serviceId: appt.serviceId,
+        name: svc?.name ?? "Dental Procedure",
+        category: svc?.category ?? "Preventive",
+        bookingCount: 0,
+        completedCount: 0,
+        noShowCount: 0,
+        estimatedRevenuePhp: 0,
+      };
+      entry.bookingCount++;
+      if (appt.status === "completed") {
+        entry.completedCount++;
+        entry.estimatedRevenuePhp += svc?.pricePhp ?? 0;
+      } else if (appt.status === "no_show") {
+        entry.noShowCount++;
+      }
+      serviceAgg.set(appt.serviceId, entry);
+    }
+
+    const totalServiceBookings = rangeAppointments.length;
+    const topServices = Array.from(serviceAgg.values())
+      .sort(
+        (a, b) =>
+          b.estimatedRevenuePhp - a.estimatedRevenuePhp ||
+          b.bookingCount - a.bookingCount
+      )
+      .slice(0, 8)
+      .map((s) => ({
+        ...s,
+        sharePct:
+          totalServiceBookings > 0
+            ? Math.round((s.bookingCount / totalServiceBookings) * 1000) / 10
+            : 0,
+      }));
+
+    // Dentist Utilization breakdown (booked minutes vs scheduled shift minutes)
+    const dateKeysInWindow = listDateKeysBetween(startKey, todayKey);
+    const apptsByDentist = new Map<Id<"dentists">, Doc<"appointments">[]>();
+    for (const appt of rangeAppointments) {
+      const list = apptsByDentist.get(appt.dentistId) ?? [];
+      list.push(appt);
+      apptsByDentist.set(appt.dentistId, list);
+    }
+
+    const timeOffByDentist = new Map<Id<"dentists">, Doc<"dentistTimeOff">[]>();
+    for (const row of timeOffRows) {
+      if (row.endTimeUtc <= rangeStartUtc || row.startTimeUtc >= rangeEndUtc) {
+        continue;
+      }
+      const list = timeOffByDentist.get(row.dentistId) ?? [];
+      list.push(row);
+      timeOffByDentist.set(row.dentistId, list);
+    }
+
+    const dentistsForReport: Doc<"dentists">[] = [
+      ...activeDentists,
+      ...inactiveDentists.filter((d) => apptsByDentist.has(d._id)),
+    ];
+
+    const dentistUtilization = dentistsForReport
+      .map((dentist) => {
+        const dentistTimeOff = timeOffByDentist.get(dentist._id) ?? [];
+        let scheduledMinutes = 0;
+
+        for (const dk of dateKeysInWindow) {
+          const dow = getDayOfWeekFromDateKey(dk);
+          const clinicDay = clinic.operatingHours.find(
+            (h) => h.dayOfWeek === dow
+          );
+          if (!clinicDay || !clinicDay.isOpen) continue;
+          const shift = dentist.weeklySchedule.find(
+            (w) => w.dayOfWeek === dow
+          );
+          if (!shift || !shift.isWorking) continue;
+
+          const effStart = Math.max(shift.startMinute, clinicDay.openMinute);
+          const effEnd = Math.min(shift.endMinute, clinicDay.closeMinute);
+          if (effEnd <= effStart) continue;
+
+          let dayMinutes = effEnd - effStart;
+          if (
+            shift.breakStartMinute !== undefined &&
+            shift.breakEndMinute !== undefined
+          ) {
+            const bStart = Math.max(shift.breakStartMinute, effStart);
+            const bEnd = Math.min(shift.breakEndMinute, effEnd);
+            if (bEnd > bStart) {
+              dayMinutes -= bEnd - bStart;
+            }
+          }
+
+          if (dentistTimeOff.length > 0 && dayMinutes > 0) {
+            const shiftStartUtc = localDateMinuteToUtc(dk, effStart, timeZone);
+            const shiftEndUtc = localDateMinuteToUtc(dk, effEnd, timeZone);
+            let offMinutes = 0;
+            for (const block of dentistTimeOff) {
+              const overlapStart = Math.max(shiftStartUtc, block.startTimeUtc);
+              const overlapEnd = Math.min(shiftEndUtc, block.endTimeUtc);
+              if (overlapEnd > overlapStart) {
+                offMinutes += Math.round((overlapEnd - overlapStart) / 60_000);
+              }
+            }
+            dayMinutes = Math.max(0, dayMinutes - offMinutes);
+          }
+
+          scheduledMinutes += dayMinutes;
+        }
+
+        const dentistAppts = apptsByDentist.get(dentist._id) ?? [];
+        let bookedAppointments = 0;
+        let completedAppointments = 0;
+        let noShowCount = 0;
+        let bookedMinutes = 0;
+        let estimatedRevenuePhp = 0;
+
+        for (const appt of dentistAppts) {
+          bookedAppointments++;
+          if (appt.status === "completed") {
+            completedAppointments++;
+            estimatedRevenuePhp += serviceMap.get(appt.serviceId)?.pricePhp ?? 0;
+          } else if (appt.status === "no_show") {
+            noShowCount++;
+          }
+          if (appt.status !== "cancelled" && appt.status !== "no_show") {
+            bookedMinutes += Math.max(
+              0,
+              Math.round((appt.endTimeUtc - appt.startTimeUtc) / 60_000)
+            );
+          }
+        }
+
+        const utilizationPct =
+          scheduledMinutes > 0
+            ? Math.min(
+                100,
+                Math.round((bookedMinutes / scheduledMinutes) * 1000) / 10
+              )
+            : 0;
+
+        return {
+          dentistId: dentist._id,
+          displayName: dentist.isActive
+            ? dentist.displayName
+            : `${dentist.displayName} (Inactive)`,
+          calendarColorHex: dentist.calendarColorHex,
+          bookedAppointments,
+          completedAppointments,
+          noShowCount,
+          bookedMinutes,
+          scheduledMinutes,
+          utilizationPct,
+          estimatedRevenuePhp,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.utilizationPct - a.utilizationPct ||
+          b.estimatedRevenuePhp - a.estimatedRevenuePhp
+      );
+
+    return {
+      rows,
+      totals,
+      rates: {
+        completionRate,
+        noShowRate,
+        cancellationRate,
+      },
+      includesLiveToday,
+      timeZone,
+      topServices,
+      dentistUtilization,
+    };
   },
 });
 
@@ -491,17 +977,30 @@ export const createDentist = mutation({
           q.eq("email", email).eq("status", "pending")
         )
         .collect();
-      if (!existingInvites.some((i) => i.clinicId === clinicId)) {
-        await ctx.db.insert("staffInvitations", {
-          clinicId,
-          email,
-          role: "dentist",
-          invitedByUserId: actor._id,
-          status: "pending",
-          expiresAt: now + 7 * DAY_MS,
-          createdAt: now,
-        });
+      for (const inv of existingInvites) {
+        if (inv.clinicId === clinicId) {
+          await ctx.db.patch(inv._id, { status: "revoked" });
+        }
       }
+
+      const token = generateInviteToken();
+      const invitationId = await ctx.db.insert("staffInvitations", {
+        clinicId,
+        email,
+        role: "dentist",
+        token,
+        invitedByUserId: actor._id,
+        status: "pending",
+        emailStatus: "queued",
+        expiresAt: now + 7 * DAY_MS,
+        createdAt: now,
+      });
+
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendRoleInvitationEmail,
+        { invitationId }
+      );
     }
 
     const color = HEX_COLOR_REGEX.test(args.calendarColorHex.trim())
@@ -554,12 +1053,28 @@ export const updateDentist = mutation({
     weeklySchedule: v.array(weeklyScheduleDayValidator),
   },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
 
     const dentist = await ctx.db.get(args.dentistId);
     if (!dentist || dentist.clinicId !== clinicId) {
       throw new ConvexError({ code: "NOT_FOUND", message: "Dentist not found." });
     }
+
+    const displayName = args.displayName.trim();
+    const licenseNumber = args.licenseNumber.trim();
+    if (displayName.length < 2) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Dentist display name must be at least 2 characters.",
+      });
+    }
+    if (!licenseNumber) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "PRC / dental license number is required.",
+      });
+    }
+
     validateWeeklySchedule(args.weeklySchedule);
 
     if (args.defaultChairId) {
@@ -577,8 +1092,8 @@ export const updateDentist = mutation({
       : dentist.calendarColorHex;
 
     await ctx.db.patch(args.dentistId, {
-      displayName: args.displayName.trim(),
-      licenseNumber: args.licenseNumber.trim(),
+      displayName,
+      licenseNumber,
       specialties: args.specialties
         .map((s) => s.trim())
         .filter((s) => s.length > 0),
@@ -586,6 +1101,16 @@ export const updateDentist = mutation({
       calendarColorHex: color,
       defaultChairId: args.defaultChairId,
       weeklySchedule: args.weeklySchedule,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: "DENTIST_UPDATED",
+      targetEntity: "dentists",
+      targetId: args.dentistId,
+      metadata: { displayName, licenseNumber },
     });
 
     return { dentistId: args.dentistId };
@@ -655,16 +1180,52 @@ export const addDentistTimeOff = mutation({
       });
     }
 
+    const overlappingCandidates = await ctx.db
+      .query("appointments")
+      .withIndex("by_dentist_and_start", (q) =>
+        q
+          .eq("dentistId", args.dentistId)
+          .gte("startTimeUtc", args.startTimeUtc - 12 * 60 * 60 * 1000)
+          .lt("startTimeUtc", args.endTimeUtc)
+      )
+      .take(200);
+    const overlappingCount = overlappingCandidates.filter(
+      (a) =>
+        a.clinicId === clinicId &&
+        a.status !== "cancelled" &&
+        a.status !== "no_show" &&
+        a.status !== "completed" &&
+        a.startTimeUtc < args.endTimeUtc &&
+        a.endTimeUtc > args.startTimeUtc
+    ).length;
+
+    const reason = args.reason.trim() || "Scheduled leave";
     const timeOffId = await ctx.db.insert("dentistTimeOff", {
       clinicId,
       dentistId: args.dentistId,
       startTimeUtc: args.startTimeUtc,
       endTimeUtc: args.endTimeUtc,
-      reason: args.reason.trim() || "Scheduled leave",
+      reason,
       createdByUserId: actor._id,
     });
 
-    return { timeOffId };
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: "DENTIST_TIME_OFF_CREATED",
+      targetEntity: "dentistTimeOff",
+      targetId: timeOffId,
+      metadata: {
+        dentistId: args.dentistId,
+        startTimeUtc: args.startTimeUtc,
+        endTimeUtc: args.endTimeUtc,
+        reason,
+        overlappingAppointmentCount: overlappingCount,
+      },
+    });
+
+    return { timeOffId, overlappingCount };
   },
 });
 
@@ -738,6 +1299,31 @@ export const createChair = mutation({
       });
     }
 
+    const [activeChairs, inactiveChairs] = await Promise.all([
+      ctx.db
+        .query("chairs")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", true)
+        )
+        .collect(),
+      ctx.db
+        .query("chairs")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", false)
+        )
+        .collect(),
+    ]);
+    if (
+      [...activeChairs, ...inactiveChairs].some(
+        (c) => c.roomCode.trim().toUpperCase() === roomCode
+      )
+    ) {
+      throw new ConvexError({
+        code: "CONFLICT",
+        message: `Room code "${roomCode}" is already assigned to another chair in this clinic.`,
+      });
+    }
+
     const chairId = await ctx.db.insert("chairs", {
       clinicId,
       name,
@@ -775,18 +1361,64 @@ export const updateChair = mutation({
     supportedCategoryTags: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
     const chair = await ctx.db.get(args.chairId);
     if (!chair || chair.clinicId !== clinicId) {
       throw new ConvexError({ code: "NOT_FOUND", message: "Chair not found." });
     }
 
+    const name = args.name.trim();
+    const roomCode = args.roomCode.trim().toUpperCase();
+    if (name.length < 2 || !roomCode) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Chair name and room code are required.",
+      });
+    }
+
+    const [activeChairs, inactiveChairs] = await Promise.all([
+      ctx.db
+        .query("chairs")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", true)
+        )
+        .collect(),
+      ctx.db
+        .query("chairs")
+        .withIndex("by_clinic", (q) =>
+          q.eq("clinicId", clinicId).eq("isActive", false)
+        )
+        .collect(),
+    ]);
+    if (
+      [...activeChairs, ...inactiveChairs].some(
+        (c) =>
+          c._id !== args.chairId &&
+          c.roomCode.trim().toUpperCase() === roomCode
+      )
+    ) {
+      throw new ConvexError({
+        code: "CONFLICT",
+        message: `Room code "${roomCode}" is already assigned to another chair in this clinic.`,
+      });
+    }
+
     await ctx.db.patch(args.chairId, {
-      name: args.name.trim(),
-      roomCode: args.roomCode.trim().toUpperCase(),
+      name,
+      roomCode,
       supportedCategoryTags: args.supportedCategoryTags
         .map((t) => t.trim())
         .filter(Boolean),
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: "CHAIR_UPDATED",
+      targetEntity: "chairs",
+      targetId: args.chairId,
+      metadata: { name, roomCode },
     });
 
     return { chairId: args.chairId };
@@ -809,7 +1441,32 @@ export const toggleChairActive = mutation({
       throw new ConvexError({ code: "NOT_FOUND", message: "Chair not found." });
     }
     if (chair.isActive === args.isActive) {
-      return { chairId: args.chairId, isActive: args.isActive };
+      return {
+        chairId: args.chairId,
+        isActive: args.isActive,
+        upcomingAppointmentsCount: 0,
+      };
+    }
+
+    const now = Date.now();
+    let upcomingAppointmentsCount = 0;
+    if (!args.isActive) {
+      const upcoming = await ctx.db
+        .query("appointments")
+        .withIndex("by_chair_and_start", (q) =>
+          q.eq("chairId", args.chairId).gte("startTimeUtc", now)
+        )
+        .take(100);
+      for (const appt of upcoming) {
+        if (
+          appt.clinicId === clinicId &&
+          appt.status !== "cancelled" &&
+          appt.status !== "no_show" &&
+          appt.status !== "completed"
+        ) {
+          upcomingAppointmentsCount++;
+        }
+      }
     }
 
     await ctx.db.patch(args.chairId, { isActive: args.isActive });
@@ -818,7 +1475,7 @@ export const toggleChairActive = mutation({
         0,
         clinic.activeChairCount + (args.isActive ? 1 : -1)
       ),
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
 
     await recordAuditLog(ctx, {
@@ -828,10 +1485,18 @@ export const toggleChairActive = mutation({
       actionType: args.isActive ? "CHAIR_REACTIVATED" : "CHAIR_DEACTIVATED",
       targetEntity: "chairs",
       targetId: args.chairId,
-      metadata: { name: chair.name, roomCode: chair.roomCode },
+      metadata: {
+        name: chair.name,
+        roomCode: chair.roomCode,
+        upcomingAppointmentsCount,
+      },
     });
 
-    return { chairId: args.chairId, isActive: args.isActive };
+    return {
+      chairId: args.chairId,
+      isActive: args.isActive,
+      upcomingAppointmentsCount,
+    };
   },
 });
 
@@ -867,8 +1532,16 @@ export const createService = mutation({
     requiredChairTag: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
 
+    const name = args.name.trim();
+    const description = args.description.trim();
+    if (name.length < 2 || description.length < 2) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Procedure name and description must be at least 2 characters.",
+      });
+    }
     if (args.durationMinutes < 5 || args.bufferMinutes < 0 || args.pricePhp < 0) {
       throw new ConvexError({
         code: "INVALID_INPUT",
@@ -878,15 +1551,25 @@ export const createService = mutation({
 
     const serviceId = await ctx.db.insert("services", {
       clinicId,
-      name: args.name.trim(),
+      name,
       category: args.category,
-      description: args.description.trim(),
+      description,
       durationMinutes: args.durationMinutes,
       bufferMinutes: args.bufferMinutes,
       pricePhp: args.pricePhp,
       requiresXray: args.requiresXray,
       requiredChairTag: args.requiredChairTag?.trim() || undefined,
       isActive: true,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: "SERVICE_CREATED",
+      targetEntity: "services",
+      targetId: serviceId,
+      metadata: { name, category: args.category, pricePhp: args.pricePhp },
     });
 
     return { serviceId };
@@ -906,21 +1589,46 @@ export const updateService = mutation({
     requiredChairTag: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
     const service = await ctx.db.get(args.serviceId);
     if (!service || service.clinicId !== clinicId) {
       throw new ConvexError({ code: "NOT_FOUND", message: "Service not found." });
     }
 
+    const name = args.name.trim();
+    const description = args.description.trim();
+    if (name.length < 2 || description.length < 2) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Procedure name and description must be at least 2 characters.",
+      });
+    }
+    if (args.durationMinutes < 5 || args.bufferMinutes < 0 || args.pricePhp < 0) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "Duration must be at least 5 minutes and buffer/price cannot be negative.",
+      });
+    }
+
     await ctx.db.patch(args.serviceId, {
-      name: args.name.trim(),
+      name,
       category: args.category,
-      description: args.description.trim(),
+      description,
       durationMinutes: args.durationMinutes,
       bufferMinutes: args.bufferMinutes,
       pricePhp: args.pricePhp,
       requiresXray: args.requiresXray,
       requiredChairTag: args.requiredChairTag?.trim() || undefined,
+    });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: "SERVICE_UPDATED",
+      targetEntity: "services",
+      targetId: args.serviceId,
+      metadata: { name, category: args.category, pricePhp: args.pricePhp },
     });
 
     return { serviceId: args.serviceId };
@@ -933,12 +1641,23 @@ export const toggleServiceActive = mutation({
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
     const service = await ctx.db.get(args.serviceId);
     if (!service || service.clinicId !== clinicId) {
       throw new ConvexError({ code: "NOT_FOUND", message: "Service not found." });
     }
     await ctx.db.patch(args.serviceId, { isActive: args.isActive });
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: args.isActive ? "SERVICE_REACTIVATED" : "SERVICE_DEACTIVATED",
+      targetEntity: "services",
+      targetId: args.serviceId,
+      metadata: { name: service.name },
+    });
+
     return { serviceId: args.serviceId, isActive: args.isActive };
   },
 });
@@ -982,47 +1701,61 @@ export const seedDefaultServices = mutation({
 export const listStaff = query({
   args: { overrideClinicId: v.optional(v.id("clinics")) },
   handler: async (ctx, args) => {
-    const { clinicId } = await requireClinicAccess(
+    const { user, clinicId } = await requireClinicAccess(
       ctx,
       ["clinic_admin"],
       args.overrideClinicId
     );
 
-    const [users, pendingInvitations, acceptedInvitations] = await Promise.all([
-      ctx.db
-        .query("users")
-        .withIndex("by_clinic_and_role", (q) => q.eq("clinicId", clinicId))
-        .collect(),
-      ctx.db
-        .query("staffInvitations")
-        .withIndex("by_clinic", (q) =>
-          q.eq("clinicId", clinicId).eq("status", "pending")
-        )
-        .collect(),
-      ctx.db
-        .query("staffInvitations")
-        .withIndex("by_clinic", (q) =>
-          q.eq("clinicId", clinicId).eq("status", "accepted")
-        )
-        .collect(),
-    ]);
+    const [users, pendingInvitations, acceptedInvitations, declinedInvitations] =
+      await Promise.all([
+        ctx.db
+          .query("users")
+          .withIndex("by_clinic_and_role", (q) => q.eq("clinicId", clinicId))
+          .collect(),
+        ctx.db
+          .query("staffInvitations")
+          .withIndex("by_clinic", (q) =>
+            q.eq("clinicId", clinicId).eq("status", "pending")
+          )
+          .collect(),
+        ctx.db
+          .query("staffInvitations")
+          .withIndex("by_clinic", (q) =>
+            q.eq("clinicId", clinicId).eq("status", "accepted")
+          )
+          .collect(),
+        ctx.db
+          .query("staffInvitations")
+          .withIndex("by_clinic", (q) =>
+            q.eq("clinicId", clinicId).eq("status", "declined")
+          )
+          .order("desc")
+          .take(10),
+      ]);
+
+    const realStaff = [];
+    for (const u of users) {
+      if (u.clerkId.startsWith("pending:")) continue;
+      realStaff.push({
+        _id: u._id,
+        email: u.email,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        role: u.role,
+        isActive: u.isActive,
+        lastLoginAt: u.lastLoginAt ?? null,
+        createdAt: u.createdAt,
+      });
+    }
 
     return {
-      staff: users
-        .filter((u) => !u.clerkId.startsWith("pending:"))
-        .map((u) => ({
-          _id: u._id,
-          email: u.email,
-          firstName: u.firstName,
-          lastName: u.lastName,
-          role: u.role,
-          isActive: u.isActive,
-          lastLoginAt: u.lastLoginAt ?? null,
-          createdAt: u.createdAt,
-        })),
+      currentUserId: user._id,
+      staff: realStaff,
       pendingInvitations: pendingInvitations.sort(
         (a, b) => b.createdAt - a.createdAt
       ),
+      declinedInvitations,
       acceptedCount: acceptedInvitations.length,
     };
   },
@@ -1038,7 +1771,11 @@ export const inviteStaff = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    // Enforce maxDentists upfront when inviting a dentist so acceptance never silently skips profile creation
+    const { user: actor, clinicId } = await requireClinicAdminWrite(
+      ctx,
+      args.role === "dentist" ? "dentist" : "staff"
+    );
 
     const email = args.email.trim().toLowerCase();
     if (!email || !email.includes("@")) {
@@ -1046,6 +1783,30 @@ export const inviteStaff = mutation({
         code: "INVALID_INPUT",
         message: "Provide a valid staff email address.",
       });
+    }
+
+    const existingUsers = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .take(5);
+    for (const existingUser of existingUsers) {
+      if (existingUser.clinicId && existingUser.clinicId !== clinicId) {
+        throw new ConvexError({
+          code: "CONFLICT",
+          message: "This email is already assigned to another dental clinic.",
+        });
+      }
+      if (
+        existingUser.clinicId === clinicId &&
+        !existingUser.clerkId.startsWith("pending:") &&
+        existingUser.isActive &&
+        existingUser.role === args.role
+      ) {
+        throw new ConvexError({
+          code: "CONFLICT",
+          message: "This person is already an active staff member with this role.",
+        });
+      }
     }
 
     const now = Date.now();
@@ -1091,7 +1852,54 @@ export const inviteStaff = mutation({
       metadata: { email, role: args.role },
     });
 
-    return { invitationId };
+    return { invitationId, token };
+  },
+});
+
+export const resendStaffInvitation = mutation({
+  args: { invitationId: v.id("staffInvitations") },
+  handler: async (ctx, args) => {
+    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const inv = await ctx.db.get(args.invitationId);
+    if (!inv || inv.clinicId !== clinicId) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Invitation not found.",
+      });
+    }
+    if (inv.status !== "pending") {
+      throw new ConvexError({
+        code: "INVALID_STATE",
+        message: `Cannot resend an invitation that is already ${inv.status}.`,
+      });
+    }
+
+    const now = Date.now();
+    const token = inv.token || generateInviteToken();
+    await ctx.db.patch(args.invitationId, {
+      token,
+      emailStatus: "queued",
+      emailError: undefined,
+      expiresAt: now + 7 * DAY_MS,
+    });
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendRoleInvitationEmail,
+      { invitationId: args.invitationId }
+    );
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId,
+      actionType: "STAFF_INVITATION_RESENT",
+      targetEntity: "staffInvitations",
+      targetId: args.invitationId,
+      metadata: { email: inv.email, role: inv.role },
+    });
+
+    return { invitationId: args.invitationId, token };
   },
 });
 
@@ -1128,7 +1936,10 @@ export const toggleStaffActive = mutation({
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const { user: actor, clinicId } = await requireClinicAdminWrite(ctx, "staff");
+    const { user: actor, clinic, clinicId } = await requireClinicAdminWrite(
+      ctx,
+      "staff"
+    );
     if (args.userId === actor._id) {
       throw new ConvexError({
         code: "INVALID_INPUT",
@@ -1143,7 +1954,47 @@ export const toggleStaffActive = mutation({
       });
     }
 
+    const now = Date.now();
     await ctx.db.patch(args.userId, { isActive: args.isActive });
+
+    // Cascade deactivation to any active linked dentist profile so patients cannot book a deactivated staff dentist
+    let deactivatedDentistProfile = false;
+    if (!args.isActive) {
+      const linkedDentists = await ctx.db
+        .query("dentists")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .take(5);
+      let activeCountDelta = 0;
+      for (const d of linkedDentists) {
+        if (d.clinicId === clinicId && d.isActive) {
+          await ctx.db.patch(d._id, { isActive: false });
+          activeCountDelta++;
+          deactivatedDentistProfile = true;
+          await recordAuditLog(ctx, {
+            actorUserId: actor._id,
+            actorRole: actor.role,
+            clinicId,
+            actionType: "DENTIST_DEACTIVATED",
+            targetEntity: "dentists",
+            targetId: d._id,
+            metadata: {
+              displayName: d.displayName,
+              reason: "Cascaded from staff account deactivation",
+            },
+          });
+        }
+      }
+      if (activeCountDelta > 0) {
+        await ctx.db.patch(clinicId, {
+          activeDentistCount: Math.max(
+            0,
+            clinic.activeDentistCount - activeCountDelta
+          ),
+          updatedAt: now,
+        });
+      }
+    }
+
     await recordAuditLog(ctx, {
       actorUserId: actor._id,
       actorRole: actor.role,
@@ -1151,10 +2002,18 @@ export const toggleStaffActive = mutation({
       actionType: args.isActive ? "STAFF_REACTIVATED" : "STAFF_DEACTIVATED",
       targetEntity: "users",
       targetId: args.userId,
-      metadata: { email: target.email, role: target.role },
+      metadata: {
+        email: target.email,
+        role: target.role,
+        deactivatedDentistProfile,
+      },
     });
 
-    return { userId: args.userId, isActive: args.isActive };
+    return {
+      userId: args.userId,
+      isActive: args.isActive,
+      deactivatedDentistProfile,
+    };
   },
 });
 
@@ -1163,10 +2022,37 @@ export const toggleStaffActive = mutation({
 // ============================================================================
 
 export const generateLogoUploadUrl = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    fileSizeBytes: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     const { clinic } = await requireClinicAdminWrite(ctx, "storage");
     assertClinicFeatureEnabled(clinic, "customBrandingEnabled");
+
+    if (args.fileSizeBytes !== undefined) {
+      if (args.fileSizeBytes <= 0 || args.fileSizeBytes > MAX_LOGO_BYTES) {
+        throw new ConvexError({
+          code: "FILE_TOO_LARGE",
+          message: "Clinic logo must be 500 KB or smaller.",
+        });
+      }
+      const plan = await ctx.db.get(clinic.planId);
+      const oldLogoMeta = clinic.logoStorageId
+        ? await ctx.db.system.get("_storage", clinic.logoStorageId)
+        : null;
+      const oldLogoBytes = oldLogoMeta?.size ?? 0;
+      const projectedBytes = Math.max(
+        0,
+        clinic.storageUsedBytes - oldLogoBytes + args.fileSizeBytes
+      );
+      if (plan && projectedBytes > plan.maxStorageBytes) {
+        throw new ConvexError({
+          code: "QUOTA_EXCEEDED",
+          message: "Uploading this logo would exceed your clinic's storage quota.",
+        });
+      }
+    }
+
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -1174,10 +2060,12 @@ export const generateLogoUploadUrl = mutation({
 export const updateClinicSettings = mutation({
   args: {
     name: v.string(),
+    slug: v.optional(v.string()),
     tagline: v.optional(v.string()),
     primaryColorHex: v.string(),
     logoStorageId: v.optional(v.id("_storage")),
     logoSizeBytes: v.optional(v.number()),
+    removeLogo: v.optional(v.boolean()),
     email: v.string(),
     phone: v.string(),
     address: v.string(),
@@ -1196,18 +2084,47 @@ export const updateClinicSettings = mutation({
       "staff"
     );
 
-    if (args.operatingHours.length !== 7) {
+    const name = args.name.trim();
+    if (name.length < 2) {
       throw new ConvexError({
         code: "INVALID_INPUT",
-        message: "Operating hours must specify all 7 days of the week.",
+        message: "Clinic name must be at least 2 characters.",
       });
     }
-    for (const day of args.operatingHours) {
-      if (day.isOpen && day.closeMinute <= day.openMinute) {
+
+    const timeZone = args.timezone.trim() || "Asia/Manila";
+    if (!isValidIanaTimeZone(timeZone)) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: `Invalid IANA timezone "${timeZone}". Example: Asia/Manila`,
+      });
+    }
+
+    validateOperatingHours(args.operatingHours);
+
+    // Optional public slug update with strict format + global uniqueness check
+    let nextSlug = clinic.slug;
+    if (args.slug !== undefined) {
+      const cleanedSlug = args.slug.trim().toLowerCase();
+      if (!SLUG_REGEX.test(cleanedSlug) || cleanedSlug.length < 2) {
         throw new ConvexError({
           code: "INVALID_INPUT",
-          message: "Closing time must be after opening time for open days.",
+          message:
+            "Public slug must be at least 2 characters using lowercase letters, numbers, and hyphens only.",
         });
+      }
+      if (cleanedSlug !== clinic.slug) {
+        const existingWithSlug = await ctx.db
+          .query("clinics")
+          .withIndex("by_slug", (q) => q.eq("slug", cleanedSlug))
+          .unique();
+        if (existingWithSlug && existingWithSlug._id !== clinicId) {
+          throw new ConvexError({
+            code: "SLUG_TAKEN",
+            message: `Public booking URL "/c/${cleanedSlug}" is already taken by another clinic.`,
+          });
+        }
+        nextSlug = cleanedSlug;
       }
     }
 
@@ -1215,32 +2132,101 @@ export const updateClinicSettings = mutation({
       ? args.primaryColorHex.trim()
       : clinic.primaryColorHex;
 
+    const isUploadingNewLogo =
+      !args.removeLogo &&
+      args.logoStorageId !== undefined &&
+      args.logoStorageId !== clinic.logoStorageId;
+    const isRemovingLogo = Boolean(args.removeLogo && clinic.logoStorageId);
+
     const changingBranding =
       nextColor.toLowerCase() !== clinic.primaryColorHex.toLowerCase() ||
-      (args.logoStorageId !== undefined &&
-        args.logoStorageId !== clinic.logoStorageId);
+      isUploadingNewLogo ||
+      isRemovingLogo;
 
     if (changingBranding) {
       assertClinicFeatureEnabled(clinic, "customBrandingEnabled");
     }
 
-    const addedBytes =
-      args.logoStorageId && args.logoStorageId !== clinic.logoStorageId
-        ? Math.max(0, args.logoSizeBytes ?? 0)
-        : 0;
+    let nextLogoStorageId: Id<"_storage"> | undefined = clinic.logoStorageId;
+    let nextStorageUsedBytes = clinic.storageUsedBytes;
+
+    if (isUploadingNewLogo && args.logoStorageId) {
+      const newLogoStorageId = args.logoStorageId;
+      const discardNewLogo = async () => {
+        try {
+          await ctx.storage.delete(newLogoStorageId);
+        } catch {
+          // Safe to ignore if already removed
+        }
+      };
+
+      const newMeta = await ctx.db.system.get("_storage", newLogoStorageId);
+      if (!newMeta) {
+        throw new ConvexError({
+          code: "NOT_FOUND",
+          message: "Uploaded logo could not be verified in storage. Please retry.",
+        });
+      }
+      if (newMeta.size <= 0 || newMeta.size > MAX_LOGO_BYTES) {
+        await discardNewLogo();
+        throw new ConvexError({
+          code: "FILE_TOO_LARGE",
+          message: "Clinic logo exceeded the 500 KB limit and was discarded.",
+        });
+      }
+
+      const oldMeta = clinic.logoStorageId
+        ? await ctx.db.system.get("_storage", clinic.logoStorageId)
+        : null;
+      const oldBytes = oldMeta?.size ?? 0;
+      const projectedBytes = Math.max(
+        0,
+        clinic.storageUsedBytes - oldBytes + newMeta.size
+      );
+      const plan = await ctx.db.get(clinic.planId);
+      if (plan && projectedBytes > plan.maxStorageBytes) {
+        await discardNewLogo();
+        throw new ConvexError({
+          code: "QUOTA_EXCEEDED",
+          message: "Uploading this logo would exceed your clinic's storage quota.",
+        });
+      }
+
+      if (clinic.logoStorageId) {
+        try {
+          await ctx.storage.delete(clinic.logoStorageId);
+        } catch {
+          // Old blob already missing
+        }
+      }
+
+      nextLogoStorageId = newLogoStorageId;
+      nextStorageUsedBytes = projectedBytes;
+    } else if (isRemovingLogo && clinic.logoStorageId) {
+      const oldMeta = await ctx.db.system.get("_storage", clinic.logoStorageId);
+      const oldBytes = oldMeta?.size ?? 0;
+      try {
+        await ctx.storage.delete(clinic.logoStorageId);
+      } catch {
+        // Already removed
+      }
+      nextLogoStorageId = undefined;
+      nextStorageUsedBytes = Math.max(0, clinic.storageUsedBytes - oldBytes);
+    }
 
     await ctx.db.patch(clinicId, {
-      name: args.name.trim(),
+      name,
+      slug: nextSlug,
       tagline: args.tagline?.trim() || undefined,
       primaryColorHex: nextColor,
-      logoStorageId: args.logoStorageId ?? clinic.logoStorageId,
-      storageUsedBytes: clinic.storageUsedBytes + addedBytes,
+      logoStorageId: nextLogoStorageId,
+      storageUsedBytes: nextStorageUsedBytes,
       email: args.email.trim().toLowerCase(),
       phone: args.phone.trim(),
       address: args.address.trim(),
       city: args.city.trim(),
       province: args.province.trim(),
-      timezone: args.timezone.trim() || "Asia/Manila",
+      timezone: timeZone,
       slotIntervalMinutes: args.slotIntervalMinutes === 15 ? 15 : 30,
       cancellationWindowHours: Math.max(0, args.cancellationWindowHours),
       emergencyBufferMinutesPerDay: Math.max(
@@ -1263,13 +2249,16 @@ export const updateClinicSettings = mutation({
       targetEntity: "clinics",
       targetId: clinicId,
       metadata: {
-        name: args.name.trim(),
+        name,
+        slug: nextSlug,
+        slugChanged: nextSlug !== clinic.slug,
+        timezone: timeZone,
         slotIntervalMinutes: args.slotIntervalMinutes === 15 ? 15 : 30,
         requireBookingApproval:
           args.requireBookingApproval ?? clinic.requireBookingApproval ?? false,
       },
     });
 
-    return { clinicId };
+    return { clinicId, slug: nextSlug };
   },
 });

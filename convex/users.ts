@@ -1,10 +1,108 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { internalMutation, type MutationCtx, mutation, query } from "./_generated/server";
+import { recordAuditLog } from "./lib/audit";
 import { getAuthenticatedUser } from "./lib/permissions";
+
+const DEFAULT_DENTIST_SCHEDULE = [
+  { dayOfWeek: 0, isWorking: false, startMinute: 540, endMinute: 1020 },
+  {
+    dayOfWeek: 1,
+    isWorking: true,
+    startMinute: 540,
+    endMinute: 1020,
+    breakStartMinute: 720,
+    breakEndMinute: 780,
+  },
+  {
+    dayOfWeek: 2,
+    isWorking: true,
+    startMinute: 540,
+    endMinute: 1020,
+    breakStartMinute: 720,
+    breakEndMinute: 780,
+  },
+  {
+    dayOfWeek: 3,
+    isWorking: true,
+    startMinute: 540,
+    endMinute: 1020,
+    breakStartMinute: 720,
+    breakEndMinute: 780,
+  },
+  {
+    dayOfWeek: 4,
+    isWorking: true,
+    startMinute: 540,
+    endMinute: 1020,
+    breakStartMinute: 720,
+    breakEndMinute: 780,
+  },
+  {
+    dayOfWeek: 5,
+    isWorking: true,
+    startMinute: 540,
+    endMinute: 1020,
+    breakStartMinute: 720,
+    breakEndMinute: 780,
+  },
+  {
+    dayOfWeek: 6,
+    isWorking: true,
+    startMinute: 540,
+    endMinute: 900,
+  },
+];
+
+async function ensureStarterDentistProfile(
+  ctx: MutationCtx,
+  params: {
+    clinicId: Id<"clinics">;
+    userId: Id<"users">;
+    firstName: string;
+    lastName: string;
+    now: number;
+  }
+) {
+  const clinic = await ctx.db.get(params.clinicId);
+  if (!clinic) return;
+
+  const existingDentistRows = await ctx.db
+    .query("dentists")
+    .withIndex("by_user", (q) => q.eq("userId", params.userId))
+    .take(20);
+  if (existingDentistRows.some((d) => d.clinicId === clinic._id)) {
+    return;
+  }
+
+  const plan = await ctx.db.get(clinic.planId);
+  if (plan && clinic.activeDentistCount >= plan.maxDentists) {
+    return;
+  }
+
+  const fullName = `${params.firstName} ${params.lastName}`.trim() || "Dentist";
+  const displayName = /^dr\.?\s/i.test(fullName) ? fullName : `Dr. ${fullName}`;
+
+  await ctx.db.insert("dentists", {
+    clinicId: clinic._id,
+    userId: params.userId,
+    displayName,
+    licenseNumber: "PENDING-PRC",
+    specialties: ["General Dentistry"],
+    calendarColorHex: clinic.primaryColorHex,
+    weeklySchedule: DEFAULT_DENTIST_SCHEDULE,
+    isActive: true,
+  });
+
+  await ctx.db.patch(clinic._id, {
+    activeDentistCount: clinic.activeDentistCount + 1,
+    updatedAt: params.now,
+  });
+}
 
 /**
  * Called by the Clerk webhook (convex/http.ts). Upserts the `users` row and
- * resolves the role: super admin email > pending staff invitation > existing > patient.
+ * resolves the role: super admin email > pending clinic staff invitation > existing > patient.
  */
 export const upsertFromClerk = internalMutation({
   args: {
@@ -40,6 +138,12 @@ export const upsertFromClerk = internalMutation({
 
     let role = existing?.role ?? ("patient" as const);
     let clinicId = existing?.clinicId;
+    let acceptedInvitation: {
+      _id: Id<"staffInvitations">;
+      role: "clinic_admin" | "dentist" | "receptionist";
+      clinicId: Id<"clinics">;
+      email: string;
+    } | null = null;
 
     if (superAdminEmail && email === superAdminEmail) {
       role = "super_admin";
@@ -51,16 +155,32 @@ export const upsertFromClerk = internalMutation({
           q.eq("email", email).eq("status", "pending")
         )
         .collect();
-      const invitation = invitations.find(
-        (i) => !i.token && i.expiresAt >= now
-      );
-      if (invitation) {
-        role = invitation.role;
-        clinicId = invitation.clinicId;
-        await ctx.db.patch(invitation._id, {
+      // Auto-assign clinic-scoped staff invitations on Clerk sign-up (super_admin invites still require explicit /invite/[token] acceptance).
+      let clinicInvite: (typeof invitations)[number] | undefined;
+      for (const inv of invitations) {
+        if (
+          inv.role !== "super_admin" &&
+          inv.clinicId !== undefined &&
+          inv.expiresAt >= now &&
+          (!clinicInvite || inv.createdAt > clinicInvite.createdAt)
+        ) {
+          clinicInvite = inv;
+        }
+      }
+
+      if (clinicInvite && clinicInvite.clinicId && clinicInvite.role !== "super_admin") {
+        role = clinicInvite.role;
+        clinicId = clinicInvite.clinicId;
+        await ctx.db.patch(clinicInvite._id, {
           status: "accepted",
           respondedAt: now,
         });
+        acceptedInvitation = {
+          _id: clinicInvite._id,
+          role: clinicInvite.role,
+          clinicId: clinicInvite.clinicId,
+          email: clinicInvite.email,
+        };
       }
     }
 
@@ -75,16 +195,43 @@ export const upsertFromClerk = internalMutation({
       clinicId,
     };
 
+    let userId: Id<"users">;
     if (existing) {
+      userId = existing._id;
       await ctx.db.patch(existing._id, {
         ...fields,
         isActive: existingByEmail ? true : existing.isActive,
       });
     } else {
-      await ctx.db.insert("users", {
+      userId = await ctx.db.insert("users", {
         ...fields,
         isActive: true,
         createdAt: now,
+      });
+    }
+
+    if (acceptedInvitation) {
+      if (acceptedInvitation.role === "dentist") {
+        await ensureStarterDentistProfile(ctx, {
+          clinicId: acceptedInvitation.clinicId,
+          userId,
+          firstName: args.firstName,
+          lastName: args.lastName,
+          now,
+        });
+      }
+      await recordAuditLog(ctx, {
+        actorUserId: userId,
+        actorRole: acceptedInvitation.role,
+        clinicId: acceptedInvitation.clinicId,
+        actionType: "ROLE_INVITATION_ACCEPTED",
+        targetEntity: "staffInvitations",
+        targetId: acceptedInvitation._id,
+        metadata: {
+          email: acceptedInvitation.email,
+          role: acceptedInvitation.role,
+          via: "clerk_webhook",
+        },
       });
     }
 
@@ -185,27 +332,47 @@ export const ensureCurrentUser = mutation({
 
     let role = pendingByEmail?.role ?? ("patient" as const);
     let clinicId = pendingByEmail?.clinicId;
+    let acceptedInvitation: {
+      _id: Id<"staffInvitations">;
+      role: "clinic_admin" | "dentist" | "receptionist";
+      clinicId: Id<"clinics">;
+      email: string;
+    } | null = null;
 
     if (superAdminEmail && email === superAdminEmail) {
       role = "super_admin";
       clinicId = undefined;
-    } else if (!pendingByEmail) {
+    } else {
       const invitations = await ctx.db
         .query("staffInvitations")
         .withIndex("by_email_and_status", (q) =>
           q.eq("email", email).eq("status", "pending")
         )
         .collect();
-      const invitation = invitations.find(
-        (i) => !i.token && i.expiresAt >= now
-      );
-      if (invitation) {
-        role = invitation.role;
-        clinicId = invitation.clinicId;
-        await ctx.db.patch(invitation._id, {
+      let clinicInvite: (typeof invitations)[number] | undefined;
+      for (const inv of invitations) {
+        if (
+          inv.role !== "super_admin" &&
+          inv.clinicId !== undefined &&
+          inv.expiresAt >= now &&
+          (!clinicInvite || inv.createdAt > clinicInvite.createdAt)
+        ) {
+          clinicInvite = inv;
+        }
+      }
+      if (clinicInvite && clinicInvite.clinicId && clinicInvite.role !== "super_admin") {
+        role = clinicInvite.role;
+        clinicId = clinicInvite.clinicId;
+        await ctx.db.patch(clinicInvite._id, {
           status: "accepted",
           respondedAt: now,
         });
+        acceptedInvitation = {
+          _id: clinicInvite._id,
+          role: clinicInvite.role,
+          clinicId: clinicInvite.clinicId,
+          email: clinicInvite.email,
+        };
       }
     }
 
@@ -226,22 +393,44 @@ export const ensureCurrentUser = mutation({
       isActive: true,
     };
 
+    let userId: Id<"users">;
     if (pendingByEmail) {
+      userId = pendingByEmail._id;
       await ctx.db.patch(pendingByEmail._id, fields);
-      return {
-        _id: pendingByEmail._id,
-        role,
-        clinicId: clinicId ?? null,
-      };
+    } else {
+      userId = await ctx.db.insert("users", {
+        ...fields,
+        createdAt: now,
+      });
     }
 
-    const newId = await ctx.db.insert("users", {
-      ...fields,
-      createdAt: now,
-    });
+    if (acceptedInvitation) {
+      if (acceptedInvitation.role === "dentist") {
+        await ensureStarterDentistProfile(ctx, {
+          clinicId: acceptedInvitation.clinicId,
+          userId,
+          firstName,
+          lastName,
+          now,
+        });
+      }
+      await recordAuditLog(ctx, {
+        actorUserId: userId,
+        actorRole: acceptedInvitation.role,
+        clinicId: acceptedInvitation.clinicId,
+        actionType: "ROLE_INVITATION_ACCEPTED",
+        targetEntity: "staffInvitations",
+        targetId: acceptedInvitation._id,
+        metadata: {
+          email: acceptedInvitation.email,
+          role: acceptedInvitation.role,
+          via: "ensure_current_user",
+        },
+      });
+    }
 
     return {
-      _id: newId,
+      _id: userId,
       role,
       clinicId: clinicId ?? null,
     };

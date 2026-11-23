@@ -117,8 +117,20 @@ const LOWER_ARCH = [
 
 type ToothVisualState = {
   wholeCondition?: ToothCondition;
+  wholeStatus?: TreatmentStatus;
   surfaces: Partial<Record<Exclude<ToothSurface, "WholeTooth">, ToothCondition>>;
+  surfaceStatuses: Partial<
+    Record<Exclude<ToothSurface, "WholeTooth">, TreatmentStatus>
+  >;
 };
+
+const WHOLE_TOOTH_OVERRIDING_CONDITIONS = new Set<ToothCondition>([
+  "sound",
+  "missing",
+  "extraction_needed",
+  "crown",
+  "implant",
+]);
 
 function ToothSvg({
   toothNumber,
@@ -153,6 +165,9 @@ function ToothSvg({
   const whole = state.wholeCondition;
   const isMissing = whole === "missing";
   const needsExtraction = whole === "extraction_needed";
+  const hasPlannedTreatment =
+    state.wholeStatus === "planned" ||
+    Object.values(state.surfaceStatuses).some((st) => st === "planned");
 
   const fillFor = (surface: Exclude<ToothSurface, "WholeTooth">): string => {
     const surfaceCond = state.surfaces[surface];
@@ -164,12 +179,31 @@ function ToothSvg({
   const strokeFor = (surface: Exclude<ToothSurface, "WholeTooth">): string =>
     isSelected && selectedSurface === surface ? "#0284c7" : "#64748b";
 
+  const handleSurfaceKeyDown = (
+    e: React.KeyboardEvent,
+    targetSurface: ToothSurface
+  ) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onSelect(toothNumber, targetSurface);
+    }
+  };
+
   return (
     <div className="flex flex-col items-center gap-0.5">
       {isUpper ? (
-        <span className="font-mono text-[10px] font-medium text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => onSelect(toothNumber, "WholeTooth")}
+          title={`Select Whole Tooth #${toothNumber}`}
+          className={`rounded px-1 font-mono text-[10px] font-medium transition-colors hover:bg-accent ${
+            isSelected && selectedSurface === "WholeTooth"
+              ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+              : "text-muted-foreground"
+          }`}
+        >
           {toothNumber}
-        </span>
+        </button>
       ) : null}
 
       <svg
@@ -178,7 +212,7 @@ function ToothSvg({
           isMissing ? "opacity-45" : ""
         } ${isSelected ? "drop-shadow-sm ring-2 ring-sky-500 rounded-md" : ""}`}
         role="group"
-        aria-label={`Tooth ${toothNumber}`}
+        aria-label={`Tooth ${toothNumber}${hasPlannedTreatment ? " (planned treatment)" : ""}`}
       >
         {/* Top trapezoid (Buccal on upper, Lingual on lower) */}
         <polygon
@@ -186,7 +220,11 @@ function ToothSvg({
           fill={fillFor(topSurface)}
           stroke={strokeFor(topSurface)}
           strokeWidth={isSelected && selectedSurface === topSurface ? 2 : 1}
+          role="button"
+          tabIndex={0}
+          aria-label={`Tooth ${toothNumber} ${topSurface} surface`}
           onClick={() => onSelect(toothNumber, topSurface)}
+          onKeyDown={(e) => handleSurfaceKeyDown(e, topSurface)}
         >
           <title>{`Tooth #${toothNumber} — ${topSurface}`}</title>
         </polygon>
@@ -197,7 +235,11 @@ function ToothSvg({
           fill={fillFor(bottomSurface)}
           stroke={strokeFor(bottomSurface)}
           strokeWidth={isSelected && selectedSurface === bottomSurface ? 2 : 1}
+          role="button"
+          tabIndex={0}
+          aria-label={`Tooth ${toothNumber} ${bottomSurface} surface`}
           onClick={() => onSelect(toothNumber, bottomSurface)}
+          onKeyDown={(e) => handleSurfaceKeyDown(e, bottomSurface)}
         >
           <title>{`Tooth #${toothNumber} — ${bottomSurface}`}</title>
         </polygon>
@@ -208,7 +250,11 @@ function ToothSvg({
           fill={fillFor(leftSurface)}
           stroke={strokeFor(leftSurface)}
           strokeWidth={isSelected && selectedSurface === leftSurface ? 2 : 1}
+          role="button"
+          tabIndex={0}
+          aria-label={`Tooth ${toothNumber} ${leftSurface} surface`}
           onClick={() => onSelect(toothNumber, leftSurface)}
+          onKeyDown={(e) => handleSurfaceKeyDown(e, leftSurface)}
         >
           <title>{`Tooth #${toothNumber} — ${leftSurface}`}</title>
         </polygon>
@@ -219,7 +265,11 @@ function ToothSvg({
           fill={fillFor(rightSurface)}
           stroke={strokeFor(rightSurface)}
           strokeWidth={isSelected && selectedSurface === rightSurface ? 2 : 1}
+          role="button"
+          tabIndex={0}
+          aria-label={`Tooth ${toothNumber} ${rightSurface} surface`}
           onClick={() => onSelect(toothNumber, rightSurface)}
+          onKeyDown={(e) => handleSurfaceKeyDown(e, rightSurface)}
         >
           <title>{`Tooth #${toothNumber} — ${rightSurface}`}</title>
         </polygon>
@@ -233,7 +283,11 @@ function ToothSvg({
           fill={fillFor("Occlusal")}
           stroke={strokeFor("Occlusal")}
           strokeWidth={isSelected && selectedSurface === "Occlusal" ? 2 : 1}
+          role="button"
+          tabIndex={0}
+          aria-label={`Tooth ${toothNumber} Occlusal surface`}
           onClick={() => onSelect(toothNumber, "Occlusal")}
+          onKeyDown={(e) => handleSurfaceKeyDown(e, "Occlusal")}
         >
           <title>{`Tooth #${toothNumber} — Occlusal`}</title>
         </rect>
@@ -253,12 +307,36 @@ function ToothSvg({
             <line x1="34" y1="6" x2="6" y2="34" />
           </g>
         ) : null}
+
+        {/* Planned treatment indicator dot */}
+        {hasPlannedTreatment ? (
+          <circle
+            cx="34"
+            cy="6"
+            r="3.5"
+            fill="#f59e0b"
+            stroke="#ffffff"
+            strokeWidth="1.2"
+            pointerEvents="none"
+          >
+            <title>Planned treatment pending</title>
+          </circle>
+        ) : null}
       </svg>
 
       {!isUpper ? (
-        <span className="font-mono text-[10px] font-medium text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => onSelect(toothNumber, "WholeTooth")}
+          title={`Select Whole Tooth #${toothNumber}`}
+          className={`rounded px-1 font-mono text-[10px] font-medium transition-colors hover:bg-accent ${
+            isSelected && selectedSurface === "WholeTooth"
+              ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+              : "text-muted-foreground"
+          }`}
+        >
           {toothNumber}
-        </span>
+        </button>
       ) : null}
     </div>
   );
@@ -294,17 +372,26 @@ export function Odontogram({
     const map = new Map<number, ToothVisualState>();
     for (let i = records.length - 1; i >= 0; i--) {
       const rec = records[i];
-      const current = map.get(rec.toothNumber) ?? { surfaces: {} };
+      const current = map.get(rec.toothNumber) ?? {
+        surfaces: {},
+        surfaceStatuses: {},
+      };
       const surf = rec.surface ?? "WholeTooth";
       if (surf === "WholeTooth") {
         current.wholeCondition = rec.condition;
-        if (rec.condition === "sound") {
+        current.wholeStatus = rec.treatmentStatus;
+        if (WHOLE_TOOTH_OVERRIDING_CONDITIONS.has(rec.condition)) {
           current.surfaces = {};
+          current.surfaceStatuses = {};
         }
       } else {
         current.surfaces = {
           ...current.surfaces,
           [surf]: rec.condition,
+        };
+        current.surfaceStatuses = {
+          ...current.surfaceStatuses,
+          [surf]: rec.treatmentStatus,
         };
       }
       map.set(rec.toothNumber, current);
@@ -395,7 +482,12 @@ export function Odontogram({
                   key={num}
                   toothNumber={num}
                   isUpper
-                  state={toothStateMap.get(num) ?? { surfaces: {} }}
+                  state={
+                    toothStateMap.get(num) ?? {
+                      surfaces: {},
+                      surfaceStatuses: {},
+                    }
+                  }
                   isSelected={selectedTooth === num}
                   selectedSurface={surface}
                   onSelect={handleSelectSurface}
@@ -414,7 +506,12 @@ export function Odontogram({
                   key={num}
                   toothNumber={num}
                   isUpper={false}
-                  state={toothStateMap.get(num) ?? { surfaces: {} }}
+                  state={
+                    toothStateMap.get(num) ?? {
+                      surfaces: {},
+                      surfaceStatuses: {},
+                    }
+                  }
                   isSelected={selectedTooth === num}
                   selectedSurface={surface}
                   onSelect={handleSelectSurface}
@@ -437,6 +534,10 @@ export function Odontogram({
                 <span>{CONDITION_META[key].label}</span>
               </div>
             ))}
+            <div className="flex items-center gap-1.5">
+              <span className="size-2.5 rounded-full bg-amber-500 ring-1 ring-amber-600/30" />
+              <span>Planned Treatment</span>
+            </div>
           </div>
         </CardContent>
       </Card>

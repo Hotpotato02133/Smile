@@ -8,6 +8,7 @@ import {
   toManilaDateKey,
   toManilaMonthKey,
 } from "./lib/audit";
+import { getLocalDateKeyAndMinute, localDateMinuteToUtc } from "./lib/scheduling";
 
 function monthlyContributionPhp(
   clinic: Doc<"clinics">,
@@ -178,11 +179,19 @@ export const rollupDailyAnalytics = internalMutation({
       else if (clinic.status === "past_due") pastDueClinics++;
       else if (clinic.status === "suspended") suspendedClinics++;
 
+      const clinicTz = clinic.timezone || "Asia/Manila";
+      const clinicDateKey =
+        args.targetDateKey ??
+        getLocalDateKeyAndMinute(now - DAY_MS, clinicTz).dateKey;
+      const clinicDayStartUtc = localDateMinuteToUtc(clinicDateKey, 0, clinicTz);
+      const clinicDayEndUtc =
+        localDateMinuteToUtc(clinicDateKey, 1439, clinicTz) + 60_000;
+
       const [dayAppts, clinicServices, clinicPatients] = await Promise.all([
         ctx.db
           .query("appointments")
           .withIndex("by_clinic_and_date", (q) =>
-            q.eq("clinicId", clinic._id).eq("dateKey", dateKey)
+            q.eq("clinicId", clinic._id).eq("dateKey", clinicDateKey)
           )
           .collect(),
         ctx.db
@@ -199,19 +208,26 @@ export const rollupDailyAnalytics = internalMutation({
         clinicServices.map((s) => [s._id, s.pricePhp])
       );
 
-      const completedCount = dayAppts.filter(
-        (a) => a.status === "completed"
-      ).length;
-      const cancelledCount = dayAppts.filter(
-        (a) => a.status === "cancelled"
-      ).length;
-      const noShowCount = dayAppts.filter((a) => a.status === "no_show").length;
-      const estimatedRevenuePhp = dayAppts
-        .filter((a) => a.status === "completed")
-        .reduce((sum, a) => sum + (servicePriceMap.get(a.serviceId) ?? 0), 0);
-      const newPatientsCount = clinicPatients.filter(
-        (p) => p.createdAt >= dayStartUtc && p.createdAt < dayEndUtc
-      ).length;
+      let completedCount = 0;
+      let cancelledCount = 0;
+      let noShowCount = 0;
+      let estimatedRevenuePhp = 0;
+      for (const a of dayAppts) {
+        if (a.status === "completed") {
+          completedCount++;
+          estimatedRevenuePhp += servicePriceMap.get(a.serviceId) ?? 0;
+        } else if (a.status === "cancelled") {
+          cancelledCount++;
+        } else if (a.status === "no_show") {
+          noShowCount++;
+        }
+      }
+      let newPatientsCount = 0;
+      for (const p of clinicPatients) {
+        if (p.createdAt >= clinicDayStartUtc && p.createdAt < clinicDayEndUtc) {
+          newPatientsCount++;
+        }
+      }
 
       totalAppointmentsBooked += dayAppts.length;
       completedAppointments += completedCount;
@@ -222,13 +238,13 @@ export const rollupDailyAnalytics = internalMutation({
       const existingClinicRow = await ctx.db
         .query("clinicMetricsDaily")
         .withIndex("by_clinic_and_date", (q) =>
-          q.eq("clinicId", clinic._id).eq("dateKey", dateKey)
+          q.eq("clinicId", clinic._id).eq("dateKey", clinicDateKey)
         )
         .unique();
 
       const clinicSnapshot = {
         clinicId: clinic._id,
-        dateKey,
+        dateKey: clinicDateKey,
         totalBooked: dayAppts.length,
         completedCount,
         cancelledCount,

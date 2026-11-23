@@ -291,9 +291,13 @@ export async function computeAvailableSlots(
       ctx.db
         .query("dentistTimeOff")
         .withIndex("by_clinic_and_time", (q) =>
-          q.eq("clinicId", clinic._id).lte("startTimeUtc", dayEndUtc)
+          q
+            .eq("clinicId", clinic._id)
+            .gte("startTimeUtc", dayStartUtc - 365 * 24 * 60 * 60 * 1000)
+            .lte("startTimeUtc", dayEndUtc)
         )
-        .collect(),
+        .order("desc")
+        .take(250),
     ]);
 
   // Filter eligible dentists working on this dayOfWeek
@@ -602,9 +606,13 @@ export async function verifySpecificPairAvailable(
       ctx.db
         .query("dentistTimeOff")
         .withIndex("by_dentist_and_time", (q) =>
-          q.eq("dentistId", dentistId).lte("startTimeUtc", endTimeUtc)
+          q
+            .eq("dentistId", dentistId)
+            .gte("startTimeUtc", startTimeUtc - 365 * 24 * 60 * 60 * 1000)
+            .lte("startTimeUtc", endTimeUtc)
         )
-        .collect(),
+        .order("desc")
+        .take(250),
     ]);
 
   if (!dentist || dentist.clinicId !== clinic._id || !dentist.isActive) {
