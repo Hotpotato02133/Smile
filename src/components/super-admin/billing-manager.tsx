@@ -3,8 +3,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "convex/react";
 import {
+  CalendarPlus,
   CheckCircle2,
   ExternalLink,
+  Mail,
   Plus,
   Receipt,
   RotateCcw,
@@ -41,6 +43,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -141,6 +144,8 @@ export function BillingManager() {
     Id<"_storage"> | undefined
   >(undefined);
   const [receiptFileName, setReceiptFileName] = useState<string>("");
+  const [syncDefaultFeatures, setSyncDefaultFeatures] = useState(false);
+  const [busyClinicId, setBusyClinicId] = useState<string | null>(null);
   const handledRenewParamRef = useRef(false);
 
   const payments = useQuery(api.subscriptions.listPayments, {
@@ -156,6 +161,8 @@ export function BillingManager() {
   const generateReceiptUploadUrl = useMutation(
     api.subscriptions.generateReceiptUploadUrl
   );
+  const extendSub = useMutation(api.superAdmin.extendClinicSubscription);
+  const sendReminder = useMutation(api.superAdmin.sendRenewalReminder);
 
   // Avoid calling `new Date()` during SSR/prerender (Next.js 16 rule)
   const form = useForm<RecordPaymentFormInput, unknown, RecordPaymentFormValues>({
@@ -239,6 +246,7 @@ export function BillingManager() {
       });
       setReceiptStorageId(undefined);
       setReceiptFileName("");
+      setSyncDefaultFeatures(false);
       setDialogOpen(true);
     },
     [clinics, plans, form]
@@ -318,14 +326,53 @@ export function BillingManager() {
         periodEnd,
         status: values.status,
         notes: values.notes || undefined,
+        syncDefaultFeatures,
       });
 
       toast.success(
-        `Invoice ${res.invoiceNumber} recorded${values.status === "paid" ? " & subscription activated" : ""}.`
+        `Invoice ${res.invoiceNumber} recorded${values.status === "paid" ? " — subscription activated & receipt emailed" : ""}.`
       );
       setDialogOpen(false);
     } catch (err) {
       toast.error(getErrorMessage(err, "Failed to record payment."));
+    }
+  };
+
+  const handleQuickExtend = async (
+    clinicId: Id<"clinics">,
+    clinicName: string
+  ) => {
+    setBusyClinicId(clinicId);
+    try {
+      const res = await extendSub({
+        clinicId,
+        extraDays: 7,
+        reason: "Quick +7d extension from Billing Renewal Queue",
+      });
+      toast.success(
+        `Extended ${clinicName} by +7 days (ends ${formatDate(res.subscriptionEndsAt)}).`
+      );
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not extend subscription."));
+    } finally {
+      setBusyClinicId(null);
+    }
+  };
+
+  const handleSendReminder = async (
+    clinicId: Id<"clinics">,
+    clinicName: string
+  ) => {
+    setBusyClinicId(clinicId);
+    try {
+      const res = await sendReminder({ clinicId });
+      toast.success(
+        `Renewal reminder queued for ${clinicName} (${res.sentTo}).`
+      );
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not send renewal reminder."));
+    } finally {
+      setBusyClinicId(null);
     }
   };
 
@@ -740,19 +787,45 @@ export function BillingManager() {
                               {formatPhp(clinic.monthlyPricePhp)}
                             </TableCell>
                             <TableCell className="text-right">
-                              <Button
-                                size="sm"
-                                onClick={() =>
-                                  openForClinic(
-                                    clinic._id,
-                                    clinic.planId,
-                                    clinic.billingCycle
-                                  )
-                                }
-                                className="h-8 rounded-full bg-[#6C5CE7] px-3.5 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
-                              >
-                                Record Renewal
-                              </Button>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busyClinicId === clinic._id}
+                                  onClick={() =>
+                                    handleQuickExtend(clinic._id, clinic.name)
+                                  }
+                                  className="h-8 rounded-full border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700"
+                                >
+                                  <CalendarPlus className="mr-1 size-3.5" />
+                                  +7d
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busyClinicId === clinic._id}
+                                  onClick={() =>
+                                    handleSendReminder(clinic._id, clinic.name)
+                                  }
+                                  className="h-8 rounded-full border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700"
+                                >
+                                  <Mail className="mr-1 size-3.5" />
+                                  Remind
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() =>
+                                    openForClinic(
+                                      clinic._id,
+                                      clinic.planId,
+                                      clinic.billingCycle
+                                    )
+                                  }
+                                  className="h-8 rounded-full bg-[#6C5CE7] px-3.5 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
+                                >
+                                  Record Renewal
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -779,23 +852,47 @@ export function BillingManager() {
                           </div>
                           <ClinicStatusBadge status={clinic.status} />
                         </div>
-                        <div className="mt-3 flex items-center justify-between">
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                           <span className="text-sm font-bold tabular-nums text-slate-950">
                             {formatPhp(clinic.monthlyPricePhp)}/mo
                           </span>
-                          <Button
-                            size="sm"
-                            onClick={() =>
-                              openForClinic(
-                                clinic._id,
-                                clinic.planId,
-                                clinic.billingCycle
-                              )
-                            }
-                            className="h-8 rounded-full bg-[#6C5CE7] px-3.5 text-xs font-semibold text-white"
-                          >
-                            Record Renewal
-                          </Button>
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busyClinicId === clinic._id}
+                              onClick={() =>
+                                handleQuickExtend(clinic._id, clinic.name)
+                              }
+                              className="h-8 rounded-full border-slate-200 bg-white px-2.5 text-xs"
+                            >
+                              +7d
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busyClinicId === clinic._id}
+                              onClick={() =>
+                                handleSendReminder(clinic._id, clinic.name)
+                              }
+                              className="h-8 rounded-full border-slate-200 bg-white px-2.5 text-xs"
+                            >
+                              Remind
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                openForClinic(
+                                  clinic._id,
+                                  clinic.planId,
+                                  clinic.billingCycle
+                                )
+                              }
+                              className="h-8 rounded-full bg-[#6C5CE7] px-3.5 text-xs font-semibold text-white"
+                            >
+                              Renew
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -1004,6 +1101,22 @@ export function BillingManager() {
                 id="pay-notes"
                 placeholder="Verified via BPI online banking"
                 {...form.register("notes")}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-[#F8FAFC] px-3.5 py-2.5">
+              <div>
+                <p className="text-xs font-medium text-slate-800">
+                  Reset feature flags to plan defaults
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Leave off on same-plan renewals to preserve custom clinic
+                  feature overrides.
+                </p>
+              </div>
+              <Switch
+                checked={syncDefaultFeatures}
+                onCheckedChange={setSyncDefaultFeatures}
               />
             </div>
 

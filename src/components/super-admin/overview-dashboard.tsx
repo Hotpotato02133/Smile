@@ -4,7 +4,9 @@ import { useMutation, useQuery } from "convex/react";
 import {
   AlertTriangle,
   ArrowUpRight,
+  Bell,
   Building2,
+  CalendarPlus,
   HardDrive,
   Mail,
   Plus,
@@ -51,6 +53,7 @@ import {
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
 
 const mrrChartConfig = {
   mrrPhp: {
@@ -60,6 +63,17 @@ const mrrChartConfig = {
   revenueCollectedTodayPhp: {
     label: "Daily Collected",
     color: "#0EA5E9",
+  },
+} satisfies ChartConfig;
+
+const growthChartConfig = {
+  totalClinics: {
+    label: "Total Clinics",
+    color: "#6C5CE7",
+  },
+  activePaidClinics: {
+    label: "Active Paid Clinics",
+    color: "#10B981",
   },
 } satisfies ChartConfig;
 
@@ -126,6 +140,7 @@ function QuotaBar({
 
 export function OverviewDashboard() {
   const [windowDays, setWindowDays] = useState<number>(30);
+  const [trendMode, setTrendMode] = useState<"revenue" | "clinics">("revenue");
   const [distributionMode, setDistributionMode] = useState<"plan" | "status">(
     "plan"
   );
@@ -133,6 +148,7 @@ export function OverviewDashboard() {
     "storage"
   );
   const [rollingUp, setRollingUp] = useState(false);
+  const [busyRenewalId, setBusyRenewalId] = useState<string | null>(null);
 
   const overview = useQuery(api.platformAnalytics.getDashboardOverview, {});
   const dailySeries = useQuery(api.platformAnalytics.getDailyMetricsSeries, {
@@ -143,6 +159,40 @@ export function OverviewDashboard() {
   });
   const freeTier = useQuery(api.platformAnalytics.getFreeTierUsage, {});
   const triggerRollup = useMutation(api.superAdmin.triggerDailyRollup);
+  const extendSubscription = useMutation(
+    api.superAdmin.extendClinicSubscription
+  );
+  const sendRenewalReminder = useMutation(api.superAdmin.sendRenewalReminder);
+
+  const handleQuickExtend = async (clinicId: Id<"clinics">, name: string) => {
+    setBusyRenewalId(`ext:${clinicId}`);
+    try {
+      const res = await extendSubscription({
+        clinicId,
+        extraDays: 7,
+        reason: "Quick +7d extension from Overview Renewal Queue",
+      });
+      toast.success(
+        `Extended ${name} by +7 days (ends ${formatDate(res.subscriptionEndsAt)}).`
+      );
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not extend subscription."));
+    } finally {
+      setBusyRenewalId(null);
+    }
+  };
+
+  const handleQuickRemind = async (clinicId: Id<"clinics">, name: string) => {
+    setBusyRenewalId(`rem:${clinicId}`);
+    try {
+      const res = await sendRenewalReminder({ clinicId });
+      toast.success(`Renewal reminder queued for ${name} (${res.sentTo}).`);
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not send renewal reminder."));
+    } finally {
+      setBusyRenewalId(null);
+    }
+  };
 
   const handleSyncSnapshot = async () => {
     setRollingUp(true);
@@ -264,10 +314,10 @@ export function OverviewDashboard() {
         </div>
       </div>
 
-      {/* Unified 4-Column KPI Strip (Split by quiet 1px dividers) */}
+      {/* Unified 5-Column KPI Strip (Split by quiet 1px dividers) */}
       <section
         aria-label="Platform key metrics"
-        className="grid grid-cols-1 divide-y divide-slate-200/80 overflow-hidden rounded-2xl border border-slate-200/80 bg-[#F8FAFC] sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x"
+        className="grid grid-cols-1 divide-y divide-slate-200/80 overflow-hidden rounded-2xl border border-slate-200/80 bg-[#F8FAFC] sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-5 xl:divide-x"
       >
         {/* Lead Figure: MRR */}
         <div className="flex flex-col justify-between p-5 sm:border-b sm:border-r sm:border-slate-200/80 xl:border-b-0 xl:border-r-0">
@@ -301,11 +351,16 @@ export function OverviewDashboard() {
           </p>
         </div>
 
-        {/* Dental Clinics */}
-        <div className="flex flex-col justify-between p-5 sm:border-r sm:border-slate-200/80 xl:border-r-0">
-          <span className="text-xs font-medium text-slate-500">
-            Dental Clinics
-          </span>
+        {/* Dental Clinics + Trial-to-Paid Conversion */}
+        <div className="flex flex-col justify-between p-5 sm:border-b sm:border-r sm:border-slate-200/80 xl:border-b-0 xl:border-r-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-slate-500">
+              Dental Clinics
+            </span>
+            <span className="text-[11px] font-semibold tabular-nums text-emerald-700">
+              {overview.trialToPaidConversionPct}% paid
+            </span>
+          </div>
           <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-slate-950">
             {overview.totalClinics.toLocaleString()}
           </p>
@@ -337,10 +392,10 @@ export function OverviewDashboard() {
         </div>
 
         {/* Appointments (Today / 30d + Completion & No-Show %) */}
-        <div className="flex flex-col justify-between p-5">
+        <div className="flex flex-col justify-between p-5 sm:border-b sm:border-slate-200/80 xl:border-b-0">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-slate-500">
-              Appointments (This Month)
+              Bookings (Month)
             </span>
             <span className="text-[11px] font-medium tabular-nums text-slate-500">
               Today: {overview.todayAppointments}
@@ -369,68 +424,174 @@ export function OverviewDashboard() {
             ) : (
               <span>
                 {overview.lifetimeAppointments.toLocaleString()} lifetime across
-                all tenants
+                tenants
               </span>
             )}
           </p>
         </div>
+
+        {/* Total Platform Users */}
+        <div className="flex flex-col justify-between p-5">
+          <span className="text-xs font-medium text-slate-500">
+            Total Users
+          </span>
+          <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-slate-950">
+            {overview.totalUsers.toLocaleString()}
+          </p>
+          <p className="mt-1.5 text-xs text-slate-500 tabular-nums">
+            {overview.userBreakdown.clinicStaff} staff ·{" "}
+            {overview.userBreakdown.patients} patients ·{" "}
+            {overview.userBreakdown.superAdmins} owner
+          </p>
+        </div>
       </section>
 
-      {/* Charts Row 1: MRR & Revenue Trend + Clinic Distribution */}
+      {/* Charts Row 1: MRR / Clinic Growth Trend + Clinic Distribution */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
         <section className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 lg:col-span-8">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-base font-semibold text-slate-950">
-                MRR &amp; Collected Revenue
+                {trendMode === "revenue"
+                  ? "MRR & Collected Revenue"
+                  : "Clinic Growth Trend"}
               </h2>
               <p className="text-xs text-slate-500">
-                Daily recurring run rate versus verified payments
+                {trendMode === "revenue"
+                  ? "Daily recurring run rate versus verified payments"
+                  : "Total provisioned tenants versus active paid clinics"}
                 {overview.lastRollupAt
                   ? ` · Last rollup ${formatDateTime(overview.lastRollupAt)}`
                   : ""}
               </p>
             </div>
-            <div className="inline-flex w-fit items-center gap-0.5 rounded-full border border-slate-200/80 bg-[#F6F8FB] p-0.5">
-              {[14, 30, 90].map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setWindowDays(d)}
-                  className={cn(
-                    "h-7 rounded-full px-3 text-xs font-semibold transition-colors cursor-pointer",
-                    windowDays === d
-                      ? "bg-white text-slate-950 shadow-xs"
-                      : "text-slate-600 hover:text-slate-950"
-                  )}
-                >
-                  {d}d
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-0.5 rounded-full border border-slate-200/80 bg-[#F6F8FB] p-0.5">
+                {(
+                  [
+                    ["revenue", "MRR"],
+                    ["clinics", "Clinics"],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setTrendMode(mode)}
+                    className={cn(
+                      "h-7 rounded-full px-3 text-xs font-semibold transition-colors cursor-pointer",
+                      trendMode === mode
+                        ? "bg-white text-slate-950 shadow-xs"
+                        : "text-slate-600 hover:text-slate-950"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="inline-flex w-fit items-center gap-0.5 rounded-full border border-slate-200/80 bg-[#F6F8FB] p-0.5">
+                {[14, 30, 90].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setWindowDays(d)}
+                    className={cn(
+                      "h-7 rounded-full px-3 text-xs font-semibold transition-colors cursor-pointer",
+                      windowDays === d
+                        ? "bg-white text-slate-950 shadow-xs"
+                        : "text-slate-600 hover:text-slate-950"
+                    )}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           <div className="relative mt-4 flex-1">
-            {!hasRevenueData ? (
+            {trendMode === "revenue" ? (
+              !hasRevenueData ? (
+                <div className="flex h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] px-6 text-center">
+                  <p className="text-sm font-semibold text-slate-800">
+                    No subscription revenue recorded in the last {windowDays}{" "}
+                    days
+                  </p>
+                  <p className="mt-1 max-w-sm text-xs text-slate-500">
+                    Provision a clinic on a paid plan or log a verified GCash /
+                    bank transfer invoice to populate this revenue curve.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    render={<Link href="/super-admin/billing" />}
+                    className="mt-4 h-8 rounded-full border-slate-200 bg-white px-4 text-xs font-semibold"
+                  >
+                    Record first payment
+                  </Button>
+                </div>
+              ) : (
+                <ChartContainer
+                  config={mrrChartConfig}
+                  className="h-[240px] w-full"
+                >
+                  <AreaChart
+                    data={dailySeries}
+                    margin={{ left: 4, right: 8, top: 8, bottom: 0 }}
+                  >
+                    <CartesianGrid
+                      vertical={false}
+                      stroke="#E2E8F0"
+                      strokeDasharray="3 3"
+                    />
+                    <XAxis
+                      dataKey="dateKey"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={8}
+                      tickFormatter={formatShortDateKey}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      width={64}
+                      tickFormatter={(v) => `₱${Number(v).toLocaleString()}`}
+                    />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <ChartLegend content={<ChartLegendContent />} />
+                    <Area
+                      type="monotone"
+                      dataKey="mrrPhp"
+                      stroke="var(--color-mrrPhp)"
+                      fill="var(--color-mrrPhp)"
+                      fillOpacity={0.14}
+                      strokeWidth={2}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="revenueCollectedTodayPhp"
+                      stroke="var(--color-revenueCollectedTodayPhp)"
+                      fill="var(--color-revenueCollectedTodayPhp)"
+                      fillOpacity={0.1}
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ChartContainer>
+              )
+            ) : !dailySeries.some((d) => d.totalClinics > 0) ? (
               <div className="flex h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] px-6 text-center">
                 <p className="text-sm font-semibold text-slate-800">
-                  No subscription revenue recorded in the last {windowDays} days
+                  No clinic growth data yet
                 </p>
                 <p className="mt-1 max-w-sm text-xs text-slate-500">
-                  Provision a clinic on a paid plan or log a verified GCash /
-                  bank transfer invoice to populate this revenue curve.
+                  Provision your first dental clinic to track tenant growth and
+                  paid conversions over time.
                 </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  render={<Link href="/super-admin/billing" />}
-                  className="mt-4 h-8 rounded-full border-slate-200 bg-white px-4 text-xs font-semibold"
-                >
-                  Record first payment
-                </Button>
               </div>
             ) : (
-              <ChartContainer config={mrrChartConfig} className="h-[240px] w-full">
+              <ChartContainer
+                config={growthChartConfig}
+                className="h-[240px] w-full"
+              >
                 <AreaChart
                   data={dailySeries}
                   margin={{ left: 4, right: 8, top: 8, bottom: 0 }}
@@ -448,27 +609,27 @@ export function OverviewDashboard() {
                     tickFormatter={formatShortDateKey}
                   />
                   <YAxis
+                    allowDecimals={false}
                     tickLine={false}
                     axisLine={false}
-                    width={64}
-                    tickFormatter={(v) => `₱${Number(v).toLocaleString()}`}
+                    width={36}
                   />
                   <ChartTooltip content={<ChartTooltipContent />} />
                   <ChartLegend content={<ChartLegendContent />} />
                   <Area
                     type="monotone"
-                    dataKey="mrrPhp"
-                    stroke="var(--color-mrrPhp)"
-                    fill="var(--color-mrrPhp)"
+                    dataKey="totalClinics"
+                    stroke="var(--color-totalClinics)"
+                    fill="var(--color-totalClinics)"
                     fillOpacity={0.14}
                     strokeWidth={2}
                   />
                   <Area
                     type="monotone"
-                    dataKey="revenueCollectedTodayPhp"
-                    stroke="var(--color-revenueCollectedTodayPhp)"
-                    fill="var(--color-revenueCollectedTodayPhp)"
-                    fillOpacity={0.1}
+                    dataKey="activePaidClinics"
+                    stroke="var(--color-activePaidClinics)"
+                    fill="var(--color-activePaidClinics)"
+                    fillOpacity={0.12}
                     strokeWidth={2}
                   />
                 </AreaChart>
@@ -568,7 +729,7 @@ export function OverviewDashboard() {
               Free-Tier Resource Gauges
             </h2>
             <p className="text-xs text-slate-500">
-              Monitor usage against $0/mo Convex and Resend limits
+              Monitor usage against $0/mo Convex, Resend, and Clerk limits
             </p>
 
             <div className="mt-5 space-y-4">
@@ -583,6 +744,12 @@ export function OverviewDashboard() {
                 valueText={`${freeTier.emails.sentThisMonth.toLocaleString()} / ${freeTier.emails.monthlyLimit.toLocaleString()}`}
                 percent={freeTier.emails.percentUsed}
                 accentClass="bg-sky-600"
+              />
+              <QuotaBar
+                label="Clerk Monthly Active Users (MAU)"
+                valueText={`${freeTier.clerkMau.activeLast30Days.toLocaleString()} / ${freeTier.clerkMau.monthlyLimit.toLocaleString()}`}
+                percent={freeTier.clerkMau.percentUsed}
+                accentClass="bg-emerald-600"
               />
             </div>
 
@@ -799,8 +966,36 @@ export function OverviewDashboard() {
                           {formatDate(clinic.subscriptionEndsAt)}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <ClinicStatusBadge status={clinic.status} />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busyRenewalId === `ext:${clinic._id}`}
+                          onClick={() =>
+                            handleQuickExtend(clinic._id, clinic.name)
+                          }
+                          title="Extend trial/subscription by +7 days"
+                          className="h-7 rounded-full border-slate-200 bg-white px-2.5 text-xs font-semibold"
+                        >
+                          <CalendarPlus className="mr-1 size-3" />
+                          +7d
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busyRenewalId === `rem:${clinic._id}`}
+                          onClick={() =>
+                            handleQuickRemind(clinic._id, clinic.name)
+                          }
+                          title="Send renewal reminder email"
+                          className="h-7 rounded-full border-slate-200 bg-white px-2.5 text-xs font-semibold"
+                        >
+                          <Bell className="mr-1 size-3" />
+                          Remind
+                        </Button>
                         <Button
                           size="sm"
                           variant="outline"

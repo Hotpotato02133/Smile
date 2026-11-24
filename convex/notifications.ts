@@ -13,6 +13,8 @@ import {
   hygieneRecallEmail,
   roleInvitationEmail,
   subscriptionExpiryAlertEmail,
+  subscriptionPaymentReceiptEmail,
+  subscriptionRenewalReminderEmail,
   waitlistOpeningEmail,
 } from "./emails/templates";
 import { toManilaMonthKey } from "./lib/audit";
@@ -348,6 +350,117 @@ export const sendSubscriptionStatusAlert = internalAction({
       graceEndsAtFormatted: args.gracePeriodEndsAt
         ? formatClinicDateTime(args.gracePeriodEndsAt)
         : undefined,
+    });
+
+    return await ctx.runAction(internal.notifications.sendClinicEmail, {
+      clinicId: args.clinicId,
+      to: args.clinicEmail,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+      skipQuotaCheck: true,
+    });
+  },
+});
+
+const PAYMENT_METHOD_EMAIL_LABELS: Record<string, string> = {
+  gcash: "GCash",
+  maya: "Maya",
+  bank_transfer: "Bank Transfer",
+  card: "Card",
+  cash: "Cash",
+  manual_waiver: "Manual Waiver",
+};
+
+type PaymentEmailContext = {
+  payment: Doc<"subscriptionPayments">;
+  clinic: Doc<"clinics">;
+  plan: Doc<"subscriptionPlans"> | null;
+  receiptUrl: string | null;
+} | null;
+
+export const getPaymentEmailContext = internalQuery({
+  args: { paymentId: v.id("subscriptionPayments") },
+  handler: async (ctx, args): Promise<PaymentEmailContext> => {
+    const payment = await ctx.db.get(args.paymentId);
+    if (!payment) return null;
+    const [clinic, plan, receiptUrl] = await Promise.all([
+      ctx.db.get(payment.clinicId),
+      ctx.db.get(payment.planId),
+      payment.receiptStorageId
+        ? ctx.storage.getUrl(payment.receiptStorageId)
+        : Promise.resolve(null),
+    ]);
+    if (!clinic) return null;
+    return { payment, clinic, plan, receiptUrl };
+  },
+});
+
+/** Dispatches a verified subscription payment receipt email to the clinic contact email. */
+export const sendSubscriptionReceiptEmail = internalAction({
+  args: { paymentId: v.id("subscriptionPayments") },
+  handler: async (ctx, args): Promise<EmailDispatchResult> => {
+    const data: PaymentEmailContext = await ctx.runQuery(
+      internal.notifications.getPaymentEmailContext,
+      { paymentId: args.paymentId }
+    );
+    if (!data || !data.clinic.email) {
+      return { sent: false, reason: "NO_CLINIC_EMAIL" };
+    }
+
+    const tz = data.clinic.timezone || "Asia/Manila";
+    const template = subscriptionPaymentReceiptEmail({
+      clinicName: data.clinic.name,
+      invoiceNumber: data.payment.invoiceNumber,
+      planName: data.plan?.name ?? "Smile Subscription",
+      billingCycle: data.payment.billingCycle,
+      amountPhp: data.payment.amountPhp,
+      paymentMethodLabel:
+        PAYMENT_METHOD_EMAIL_LABELS[data.payment.paymentMethod] ??
+        data.payment.paymentMethod,
+      referenceNumber: data.payment.referenceNumber,
+      periodStartFormatted: formatClinicDateTime(data.payment.periodStart, tz),
+      periodEndFormatted: formatClinicDateTime(data.payment.periodEnd, tz),
+      receiptUrl: data.receiptUrl,
+    });
+
+    return await ctx.runAction(internal.notifications.sendClinicEmail, {
+      clinicId: data.clinic._id,
+      to: data.clinic.email,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+      skipQuotaCheck: true,
+    });
+  },
+});
+
+/** Manually triggered renewal reminder email for expiring trials, upcoming renewals, or past-due clinics. */
+export const sendClinicRenewalReminderEmail = internalAction({
+  args: {
+    clinicId: v.id("clinics"),
+    clinicName: v.string(),
+    clinicEmail: v.string(),
+    clinicTimezone: v.optional(v.string()),
+    planName: v.string(),
+    status: v.string(),
+    amountPhp: v.number(),
+    billingCycle: v.string(),
+    subscriptionEndsAt: v.number(),
+    customNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<EmailDispatchResult> => {
+    const template = subscriptionRenewalReminderEmail({
+      clinicName: args.clinicName,
+      planName: args.planName,
+      status: args.status,
+      amountPhp: args.amountPhp,
+      billingCycle: args.billingCycle,
+      endsAtFormatted: formatClinicDateTime(
+        args.subscriptionEndsAt,
+        args.clinicTimezone || "Asia/Manila"
+      ),
+      customNote: args.customNote,
     });
 
     return await ctx.runAction(internal.notifications.sendClinicEmail, {

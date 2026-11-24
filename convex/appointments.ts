@@ -115,6 +115,7 @@ export const getFrontDeskWorkspace = query({
       appointments,
       waitlistRows,
       pendingApprovalRows,
+      activeAnnouncements,
     ] = await Promise.all([
       ctx.db.get(clinic.planId),
       ctx.db
@@ -166,6 +167,11 @@ export const getFrontDeskWorkspace = query({
           q.eq("clinicId", clinicId).eq("status", "pending_approval")
         )
         .take(50),
+      ctx.db
+        .query("systemAnnouncements")
+        .withIndex("by_active", (q) => q.eq("isActive", true))
+        .order("desc")
+        .take(20),
     ]);
 
     const allDentists = [...activeDentists, ...inactiveDentists];
@@ -287,6 +293,18 @@ export const getFrontDeskWorkspace = query({
       clinic.emergencyBufferMinutesPerDay
     );
 
+    const visibleAnnouncements = [];
+    for (const a of activeAnnouncements) {
+      if (a.expiresAt && a.expiresAt < now) continue;
+      if (
+        a.targetAudience === "all_users" ||
+        a.targetAudience === "all_clinic_staff" ||
+        (a.targetAudience === "clinic_admins_only" && user.role === "clinic_admin")
+      ) {
+        visibleAnnouncements.push(a);
+      }
+    }
+
     return {
       user: {
         _id: user._id,
@@ -300,6 +318,7 @@ export const getFrontDeskWorkspace = query({
       isSuperAdminOverride,
       isReadOnly: readOnlyState.isReadOnly,
       readOnlyReason: readOnlyState.readOnlyReason,
+      announcements: visibleAnnouncements,
       emergencyWindow,
       dentists: activeDentists.map((d) => ({
         _id: d._id,
@@ -426,6 +445,7 @@ export const getDentistQueue = query({
       activeChairs,
       inactiveChairs,
       services,
+      activeAnnouncements,
     ] = await Promise.all([
       ctx.db.get(clinic.planId),
       ctx.db
@@ -463,6 +483,11 @@ export const getDentistQueue = query({
         .query("services")
         .withIndex("by_clinic_and_category", (q) => q.eq("clinicId", clinicId))
         .collect(),
+      ctx.db
+        .query("systemAnnouncements")
+        .withIndex("by_active", (q) => q.eq("isActive", true))
+        .order("desc")
+        .take(20),
     ]);
 
     const ownClinicDentist =
@@ -522,6 +547,18 @@ export const getDentistQueue = query({
         ? [ownClinicDentist]
         : [];
 
+    const visibleAnnouncements = [];
+    for (const a of activeAnnouncements) {
+      if (a.expiresAt && a.expiresAt < now) continue;
+      if (
+        a.targetAudience === "all_users" ||
+        a.targetAudience === "all_clinic_staff" ||
+        (a.targetAudience === "clinic_admins_only" && user.role === "clinic_admin")
+      ) {
+        visibleAnnouncements.push(a);
+      }
+    }
+
     return {
       user: {
         _id: user._id,
@@ -537,6 +574,7 @@ export const getDentistQueue = query({
       hasLinkedDentistProfile: Boolean(ownClinicDentist),
       isReadOnly: readOnlyState.isReadOnly,
       readOnlyReason: readOnlyState.readOnlyReason,
+      announcements: visibleAnnouncements,
       selectedDentistId: resolvedDentistId,
       dentists: visibleDentists.map((d) => ({
         _id: d._id,

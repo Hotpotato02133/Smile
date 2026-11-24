@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "convex/react";
 import {
+  ArrowRight,
   Building2,
   Check,
   Copy,
@@ -19,6 +20,7 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -1102,11 +1104,22 @@ export function UsersInvitationsManager() {
               <div className="space-y-1.5">
                 <Label>Assign to Dental Clinic</Label>
                 {clinics && clinics.length === 0 ? (
-                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    No dental clinics provisioned yet. Provision a clinic first
-                    on the <strong>Clinics</strong> page before inviting clinic
-                    staff.
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+                    <p className="max-w-xs">
+                      No dental clinics provisioned yet. Provision a clinic
+                      first before inviting clinic staff.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      render={<Link href="/super-admin/clinics" />}
+                      onClick={() => setInviteOpen(false)}
+                      className="h-7 rounded-full border-amber-300 bg-white px-3 text-xs font-semibold text-amber-950 hover:bg-amber-100"
+                    >
+                      Go to Clinics
+                      <ArrowRight className="ml-1 size-3" />
+                    </Button>
+                  </div>
                 ) : (
                   <Select
                     value={watchedClinicId ?? ""}

@@ -1,8 +1,11 @@
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { recordAuditLog } from "./lib/audit";
 import { requireSuperAdmin } from "./lib/permissions";
+
+const MAX_RECEIPT_BYTES = 1024 * 1024; // 1 MB server-side cap for receipts (PDFs/images)
 
 const planCodeValidator = v.union(
   v.literal("trial"),
@@ -68,13 +71,17 @@ export const upsertPlan = mutation({
     if (
       args.monthlyPricePhp < 0 ||
       args.annualPricePhp < 0 ||
+      args.trialDays < 0 ||
       args.maxDentists < 1 ||
       args.maxChairs < 1 ||
-      args.maxAppointmentsPerMonth < 1
+      args.maxAppointmentsPerMonth < 1 ||
+      args.maxStorageBytes <= 0 ||
+      args.maxEmailsPerMonth <= 0
     ) {
       throw new ConvexError({
         code: "INVALID_INPUT",
-        message: "Prices must be non-negative and resource quotas must be at least 1.",
+        message:
+          "Prices and trial days must be non-negative and all resource quotas must be positive.",
       });
     }
 
@@ -223,6 +230,7 @@ export const recordPayment = mutation({
     periodEnd: v.number(),
     status: paymentStatusValidator,
     notes: v.optional(v.string()),
+    syncDefaultFeatures: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const actor = await requireSuperAdmin(ctx);
@@ -253,14 +261,39 @@ export const recordPayment = mutation({
       });
     }
 
+    const receiptMeta = args.receiptStorageId
+      ? await ctx.db.system.get("_storage", args.receiptStorageId)
+      : null;
+    if (args.receiptStorageId && !receiptMeta) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "Uploaded receipt could not be verified in storage.",
+      });
+    }
+    const receiptBytes = receiptMeta?.size ?? 0;
+    if (args.receiptStorageId && receiptBytes > MAX_RECEIPT_BYTES) {
+      try {
+        await ctx.storage.delete(args.receiptStorageId);
+      } catch {
+        // Ignore cleanup failure
+      }
+      throw new ConvexError({
+        code: "FILE_TOO_LARGE",
+        message: "Uploaded receipt exceeded the 1 MB limit and was discarded.",
+      });
+    }
+
     const now = Date.now();
     const year = new Date(now).getUTCFullYear();
     const latestPayment = await ctx.db
       .query("subscriptionPayments")
       .order("desc")
       .first();
-    const lastSeqMatch = latestPayment?.invoiceNumber.match(/-(\d+)$/);
-    const nextSeq = lastSeqMatch ? Number(lastSeqMatch[1]) + 1 : 1;
+    const lastSeqMatch = latestPayment?.invoiceNumber.match(/^INV-(\d{4})-(\d+)$/);
+    const nextSeq =
+      lastSeqMatch && Number(lastSeqMatch[1]) === year
+        ? Number(lastSeqMatch[2]) + 1
+        : 1;
     const invoiceNumber = `INV-${year}-${String(nextSeq).padStart(5, "0")}`;
 
     const paymentId = await ctx.db.insert("subscriptionPayments", {
@@ -281,12 +314,12 @@ export const recordPayment = mutation({
       createdAt: now,
     });
 
-    const receiptMeta = args.receiptStorageId
-      ? await ctx.db.system.get("_storage", args.receiptStorageId)
-      : null;
-    const receiptBytes = receiptMeta?.size ?? 0;
-
     if (args.status === "paid") {
+      // Preserve custom per-clinic feature overrides on same-plan renewals unless explicitly synced
+      const shouldSyncFeatures =
+        args.syncDefaultFeatures !== undefined
+          ? args.syncDefaultFeatures
+          : args.planId !== clinic.planId;
       await ctx.db.patch(args.clinicId, {
         planId: args.planId,
         billingCycle: args.billingCycle,
@@ -294,10 +327,18 @@ export const recordPayment = mutation({
         subscriptionStartsAt: Math.min(clinic.subscriptionStartsAt, args.periodStart),
         subscriptionEndsAt: Math.max(clinic.subscriptionEndsAt, args.periodEnd),
         gracePeriodEndsAt: undefined,
-        featureFlags: { ...plan.defaultFeatures },
+        featureFlags: shouldSyncFeatures
+          ? { ...plan.defaultFeatures }
+          : clinic.featureFlags,
         storageUsedBytes: clinic.storageUsedBytes + receiptBytes,
         updatedAt: now,
       });
+
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendSubscriptionReceiptEmail,
+        { paymentId }
+      );
     } else if (receiptBytes > 0) {
       await ctx.db.patch(args.clinicId, {
         storageUsedBytes: clinic.storageUsedBytes + receiptBytes,
@@ -353,7 +394,7 @@ export const updatePaymentStatus = mutation({
       notes: args.notes !== undefined ? args.notes.trim() || undefined : payment.notes,
     });
 
-    if (args.status === "paid") {
+    if (args.status === "paid" && payment.status !== "paid") {
       const [clinic, plan] = await Promise.all([
         ctx.db.get(payment.clinicId),
         ctx.db.get(payment.planId),
@@ -368,6 +409,11 @@ export const updatePaymentStatus = mutation({
           updatedAt: now,
         });
       }
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendSubscriptionReceiptEmail,
+        { paymentId: args.paymentId }
+      );
     }
 
     await recordAuditLog(ctx, {

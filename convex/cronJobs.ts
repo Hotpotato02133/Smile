@@ -5,6 +5,7 @@ import { internalMutation } from "./_generated/server";
 import {
   DAY_MS,
   GRACE_PERIOD_MS,
+  recordAuditLog,
   toManilaDateKey,
   toManilaMonthKey,
 } from "./lib/audit";
@@ -37,17 +38,25 @@ export const sweepSubscriptions = internalMutation({
     const now = Date.now();
     const currentMonthKey = toManilaMonthKey(now);
 
-    const [expiredByDate, pastDueClinics, allClinics] = await Promise.all([
-      ctx.db
-        .query("clinics")
-        .withIndex("by_subscription_end", (q) => q.lte("subscriptionEndsAt", now))
-        .collect(),
-      ctx.db
-        .query("clinics")
-        .withIndex("by_status", (q) => q.eq("status", "past_due"))
-        .collect(),
-      ctx.db.query("clinics").collect(),
-    ]);
+    const [expiredByDate, pastDueClinics, allClinics, superAdmins] =
+      await Promise.all([
+        ctx.db
+          .query("clinics")
+          .withIndex("by_subscription_end", (q) =>
+            q.lte("subscriptionEndsAt", now)
+          )
+          .take(500),
+        ctx.db
+          .query("clinics")
+          .withIndex("by_status", (q) => q.eq("status", "past_due"))
+          .take(500),
+        ctx.db.query("clinics").take(500),
+        ctx.db
+          .query("users")
+          .withIndex("by_role", (q) => q.eq("role", "super_admin"))
+          .take(1),
+      ]);
+    const systemActor = superAdmins[0] ?? null;
 
     let transitionedToPastDue = 0;
     let transitionedToSuspended = 0;
@@ -76,6 +85,22 @@ export const sweepSubscriptions = internalMutation({
           gracePeriodEndsAt,
         }
       );
+
+      if (systemActor) {
+        await recordAuditLog(ctx, {
+          actorUserId: systemActor._id,
+          actorRole: "system_cron",
+          clinicId: clinic._id,
+          actionType: "CLINIC_AUTO_PAST_DUE",
+          targetEntity: "clinics",
+          targetId: clinic._id,
+          metadata: {
+            clinicName: clinic.name,
+            previousStatus: clinic.status,
+            gracePeriodEndsAt,
+          },
+        });
+      }
     }
 
     // 2. Grace-period expired past_due -> suspended (Read-Only Mode)
@@ -101,6 +126,21 @@ export const sweepSubscriptions = internalMutation({
           subscriptionEndsAt: clinic.subscriptionEndsAt,
         }
       );
+
+      if (systemActor) {
+        await recordAuditLog(ctx, {
+          actorUserId: systemActor._id,
+          actorRole: "system_cron",
+          clinicId: clinic._id,
+          actionType: "CLINIC_AUTO_SUSPENDED",
+          targetEntity: "clinics",
+          targetId: clinic._id,
+          metadata: {
+            clinicName: clinic.name,
+            graceEnd,
+          },
+        });
+      }
     }
 
     // 3. Roll over monthly appointment & email quota counters on the 1st of a new month
@@ -167,12 +207,16 @@ export const rollupDailyAnalytics = internalMutation({
     let noShowAppointments = 0;
     let newPatientsRegistered = 0;
     let totalStorageUsedBytes = 0;
-    const totalEmailsSentToday = 0;
+    const monthKeyForDate = dateKey.slice(0, 7);
+    let totalMonthlyEmailsCumulative = 0;
 
     for (const clinic of clinics) {
       const plan = planMap.get(clinic.planId);
       mrrPhp += monthlyContributionPhp(clinic, plan);
       totalStorageUsedBytes += clinic.storageUsedBytes;
+      if (clinic.currentMonthKey === monthKeyForDate) {
+        totalMonthlyEmailsCumulative += clinic.currentMonthEmailCount;
+      }
 
       if (clinic.status === "active") activePaidClinics++;
       else if (clinic.status === "trial") trialClinics++;
@@ -264,6 +308,23 @@ export const rollupDailyAnalytics = internalMutation({
       .withIndex("by_date", (q) => q.eq("dateKey", dateKey))
       .unique();
 
+    // Estimate today's email count as delta against prior rolled-up days in the same month
+    const monthPrefix = `${monthKeyForDate}-01`;
+    const priorMonthRows = await ctx.db
+      .query("platformMetricsDaily")
+      .withIndex("by_date", (q) =>
+        q.gte("dateKey", monthPrefix).lt("dateKey", dateKey)
+      )
+      .take(31);
+    let emailsLoggedEarlierThisMonth = 0;
+    for (const row of priorMonthRows) {
+      emailsLoggedEarlierThisMonth += row.totalEmailsSentToday;
+    }
+    const totalEmailsSentToday = Math.max(
+      0,
+      totalMonthlyEmailsCumulative - emailsLoggedEarlierThisMonth
+    );
+
     const platformSnapshot = {
       dateKey,
       totalClinics: clinics.length,
@@ -300,33 +361,40 @@ export const rollupDailyAnalytics = internalMutation({
 export const dispatch24hReminders = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const tomorrowKey = toManilaDateKey(Date.now() + DAY_MS);
+    const now = Date.now();
+    const defaultTomorrowKey = toManilaDateKey(now + DAY_MS);
 
     const [activeClinics, trialClinics, pastDueClinics] = await Promise.all([
       ctx.db
         .query("clinics")
         .withIndex("by_status", (q) => q.eq("status", "active"))
-        .collect(),
+        .take(500),
       ctx.db
         .query("clinics")
         .withIndex("by_status", (q) => q.eq("status", "trial"))
-        .collect(),
+        .take(500),
       ctx.db
         .query("clinics")
         .withIndex("by_status", (q) => q.eq("status", "past_due"))
-        .collect(),
+        .take(500),
     ]);
 
     const eligibleClinics = [...activeClinics, ...trialClinics, ...pastDueClinics];
     let scheduled = 0;
 
     for (const clinic of eligibleClinics) {
+      const clinicTz = clinic.timezone || "Asia/Manila";
+      const clinicTomorrowKey = getLocalDateKeyAndMinute(
+        now + DAY_MS,
+        clinicTz
+      ).dateKey;
+
       const tomorrowAppts = await ctx.db
         .query("appointments")
         .withIndex("by_clinic_and_date", (q) =>
-          q.eq("clinicId", clinic._id).eq("dateKey", tomorrowKey)
+          q.eq("clinicId", clinic._id).eq("dateKey", clinicTomorrowKey)
         )
-        .collect();
+        .take(250);
 
       for (const appt of tomorrowAppts) {
         if (appt.status !== "confirmed" || appt.reminder24hSent) continue;
@@ -343,7 +411,7 @@ export const dispatch24hReminders = internalMutation({
       }
     }
 
-    return { tomorrowKey, remindersScheduled: scheduled };
+    return { tomorrowKey: defaultTomorrowKey, remindersScheduled: scheduled };
   },
 });
 
@@ -354,23 +422,27 @@ export const dispatch24hReminders = internalMutation({
 export const dispatchHygieneRecalls = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const todayKey = toManilaDateKey(Date.now());
+    const now = Date.now();
+    const defaultTodayKey = toManilaDateKey(now);
     const activeClinics = await ctx.db
       .query("clinics")
       .withIndex("by_status", (q) => q.eq("status", "active"))
-      .collect();
+      .take(500);
 
     let recallsScheduled = 0;
 
     for (const clinic of activeClinics) {
       if (!clinic.featureFlags.recallAutomationEnabled) continue;
 
+      const clinicTz = clinic.timezone || "Asia/Manila";
+      const clinicTodayKey = getLocalDateKeyAndMinute(now, clinicTz).dateKey;
+
       const duePatients = await ctx.db
         .query("patients")
         .withIndex("by_clinic_and_recall", (q) =>
-          q.eq("clinicId", clinic._id).eq("nextRecallDate", todayKey)
+          q.eq("clinicId", clinic._id).eq("nextRecallDate", clinicTodayKey)
         )
-        .collect();
+        .take(200);
 
       for (const patient of duePatients) {
         // Clear nextRecallDate so the patient is not emailed repeatedly
@@ -395,7 +467,7 @@ export const dispatchHygieneRecalls = internalMutation({
       }
     }
 
-    return { todayKey, recallsScheduled };
+    return { todayKey: defaultTodayKey, recallsScheduled };
   },
 });
 

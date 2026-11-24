@@ -19,6 +19,7 @@ import {
   FileText,
   Globe,
   Lock,
+  Megaphone,
   Save,
   ShieldAlert,
   ShieldCheck,
@@ -573,6 +574,24 @@ function ConnectedDentistWorkspace({
           </span>
         </div>
       ) : null}
+
+      {(queueData.announcements ?? []).slice(0, 2).map((ann) => (
+        <div
+          key={ann._id}
+          className={`flex items-start gap-2 border-b px-6 py-2 text-xs ${
+            ann.severity === "critical"
+              ? "border-rose-500/30 bg-rose-500/10 text-rose-900 dark:text-rose-200"
+              : ann.severity === "warning"
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200"
+                : "border-sky-500/30 bg-sky-500/10 text-sky-900 dark:text-sky-200"
+          }`}
+        >
+          <Megaphone className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            <strong>{ann.title}:</strong> {ann.message}
+          </span>
+        </div>
+      ))}
 
       {/* Top Header */}
       <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur lg:px-6">

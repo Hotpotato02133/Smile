@@ -445,12 +445,22 @@ export function PlansManager() {
               <div className="space-y-1.5">
                 <Label htmlFor="plan-name">Display Name</Label>
                 <Input id="plan-name" {...form.register("name")} />
+                {form.formState.errors.name ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.name.message}
+                  </p>
+                ) : null}
               </div>
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="plan-desc">Description</Label>
               <Input id="plan-desc" {...form.register("description")} />
+              {form.formState.errors.description ? (
+                <p className="text-xs text-destructive">
+                  {form.formState.errors.description.message}
+                </p>
+              ) : null}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -462,6 +472,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("monthlyPricePhp")}
                 />
+                {form.formState.errors.monthlyPricePhp ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.monthlyPricePhp.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="plan-yr">Annual (PHP)</Label>
@@ -471,6 +486,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("annualPricePhp")}
                 />
+                {form.formState.errors.annualPricePhp ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.annualPricePhp.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="plan-trial">Trial Days</Label>
@@ -480,6 +500,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("trialDays")}
                 />
+                {form.formState.errors.trialDays ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.trialDays.message}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -492,6 +517,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("maxDentists")}
                 />
+                {form.formState.errors.maxDentists ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.maxDentists.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="plan-chairs">Max Chairs</Label>
@@ -501,6 +531,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("maxChairs")}
                 />
+                {form.formState.errors.maxChairs ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.maxChairs.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="plan-appts">Max Appts / Mo</Label>
@@ -510,6 +545,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("maxAppointmentsPerMonth")}
                 />
+                {form.formState.errors.maxAppointmentsPerMonth ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.maxAppointmentsPerMonth.message}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -522,6 +562,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("maxStorageMb")}
                 />
+                {form.formState.errors.maxStorageMb ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.maxStorageMb.message}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="plan-emails">Max Emails / Mo</Label>
@@ -531,6 +576,11 @@ export function PlansManager() {
                   className="tabular-nums"
                   {...form.register("maxEmailsPerMonth")}
                 />
+                {form.formState.errors.maxEmailsPerMonth ? (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.maxEmailsPerMonth.message}
+                  </p>
+                ) : null}
               </div>
             </div>
 

@@ -205,6 +205,100 @@ export function subscriptionExpiryAlertEmail(params: {
   };
 }
 
+export function subscriptionPaymentReceiptEmail(params: {
+  clinicName: string;
+  invoiceNumber: string;
+  planName: string;
+  billingCycle: "monthly" | "annual";
+  amountPhp: number;
+  paymentMethodLabel: string;
+  referenceNumber?: string;
+  periodStartFormatted: string;
+  periodEndFormatted: string;
+  receiptUrl?: string | null;
+}): EmailTemplateOutput {
+  const formattedAmount = `₱${params.amountPhp.toLocaleString("en-PH")}`;
+  const subject = `Payment Receipt ${params.invoiceNumber} — ${params.clinicName}`;
+  const receiptButton = params.receiptUrl
+    ? `<p style="margin:20px 0 8px;">
+         <a href="${escapeHtml(params.receiptUrl)}" style="display:inline-block;padding:10px 18px;background:#6C5CE7;color:#ffffff;text-decoration:none;border-radius:9999px;font-weight:600;font-size:13px;">Download Attached Receipt</a>
+       </p>`
+    : "";
+
+  const bodyHtml = `
+    <p>Hello ${escapeHtml(params.clinicName)} Team,</p>
+    <p>Thank you! Your Smile Dental SaaS subscription payment has been verified and your clinic is active.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border-radius:8px;">
+      <tr><td style="padding:8px 12px;color:#64748b;">Invoice #</td><td style="padding:8px 12px;font-weight:600;font-family:monospace;">${escapeHtml(params.invoiceNumber)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Plan</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(params.planName)} (${escapeHtml(params.billingCycle)})</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Amount Paid</td><td style="padding:8px 12px;font-weight:700;color:#0f172a;">${escapeHtml(formattedAmount)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Method</td><td style="padding:8px 12px;">${escapeHtml(params.paymentMethodLabel)}${params.referenceNumber ? ` (Ref: ${escapeHtml(params.referenceNumber)})` : ""}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Coverage Period</td><td style="padding:8px 12px;">${escapeHtml(params.periodStartFormatted)} – ${escapeHtml(params.periodEndFormatted)}</td></tr>
+    </table>
+    ${receiptButton}
+    <p style="font-size:13px;color:#475569;">You can view all invoices and live plan quotas anytime inside <strong>Clinic Admin → Subscription &amp; Billing</strong>.</p>
+  `;
+
+  return {
+    subject,
+    html: wrapLayout(
+      "#6C5CE7",
+      "Smile Dental SaaS Platform",
+      "Subscription Payment Verified",
+      bodyHtml,
+      `Official digital invoice record ${params.invoiceNumber} from Smile Dental SaaS.`
+    ),
+    text: `Payment Receipt ${params.invoiceNumber}\nClinic: ${params.clinicName}\nPlan: ${params.planName} (${params.billingCycle})\nAmount Paid: ${formattedAmount}\nMethod: ${params.paymentMethodLabel}${params.referenceNumber ? ` (Ref: ${params.referenceNumber})` : ""}\nCoverage: ${params.periodStartFormatted} – ${params.periodEndFormatted}${params.receiptUrl ? `\nReceipt: ${params.receiptUrl}` : ""}`,
+  };
+}
+
+export function subscriptionRenewalReminderEmail(params: {
+  clinicName: string;
+  planName: string;
+  status: string;
+  amountPhp: number;
+  billingCycle: string;
+  endsAtFormatted: string;
+  customNote?: string;
+}): EmailTemplateOutput {
+  const isTrial = params.status === "trial";
+  const formattedRate = `₱${params.amountPhp.toLocaleString("en-PH")}`;
+  const subject = isTrial
+    ? `Your Smile Free Trial for ${params.clinicName} Ends ${params.endsAtFormatted}`
+    : `Upcoming Subscription Renewal — ${params.clinicName}`;
+
+  const noteHtml = params.customNote
+    ? `<div style="margin:14px 0;padding:12px 14px;background:#f8fafc;border-left:3px solid #6C5CE7;border-radius:6px;font-size:13px;color:#334155;">
+         ${escapeHtml(params.customNote)}
+       </div>`
+    : "";
+
+  const bodyHtml = `
+    <p>Hello ${escapeHtml(params.clinicName)} Team,</p>
+    <p>This is a friendly reminder that your <strong>${escapeHtml(params.planName)}</strong> ${isTrial ? "trial" : "subscription"} is scheduled to end on <strong>${escapeHtml(params.endsAtFormatted)}</strong>.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border-radius:8px;">
+      <tr><td style="padding:8px 12px;color:#64748b;">Current Plan</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(params.planName)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Status</td><td style="padding:8px 12px;text-transform:capitalize;">${escapeHtml(params.status.replace("_", " "))}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Renewal Rate</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(formattedRate)} / ${escapeHtml(params.billingCycle)}</td></tr>
+      <tr><td style="padding:8px 12px;color:#64748b;">Renewal Date</td><td style="padding:8px 12px;font-weight:600;">${escapeHtml(params.endsAtFormatted)}</td></tr>
+    </table>
+    ${noteHtml}
+    <p style="font-size:13px;color:#475569;">Reply with your GCash, Maya, or Bank Transfer confirmation so we can extend your billing cycle without interrupting patient online bookings.</p>
+  `;
+
+  return {
+    subject,
+    html: wrapLayout(
+      "#d97706",
+      "Smile Dental SaaS Platform",
+      isTrial ? "Your Free Trial is Ending Soon" : "Subscription Renewal Reminder",
+      bodyHtml,
+      "Sent by your Smile Dental SaaS Platform Administrator."
+    ),
+    text: `Hello ${params.clinicName},\n\nYour ${params.planName} ${isTrial ? "trial" : "subscription"} ends on ${params.endsAtFormatted} (Rate: ${formattedRate}/${params.billingCycle}).${params.customNote ? `\n\nNote: ${params.customNote}` : ""}\n\nPlease settle your renewal via GCash, Maya, or Bank Transfer to avoid interruption.`,
+  };
+}
+
 const INVITE_ROLE_LABELS: Record<
   "super_admin" | "clinic_admin" | "dentist" | "receptionist",
   { label: string; summary: string }

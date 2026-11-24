@@ -6,6 +6,8 @@ import {
   ArrowUpRight,
   Building2,
   CalendarPlus,
+  Check,
+  Copy,
   CreditCard,
   ExternalLink,
   MailPlus,
@@ -184,6 +186,11 @@ function ProvisionClinicDialog({
   const createClinic = useMutation(api.superAdmin.createClinic);
   const ensurePlans = useMutation(api.superAdmin.ensureDefaultPlans);
   const [seeding, setSeeding] = useState(false);
+  const [provisionedResult, setProvisionedResult] = useState<{
+    slug: string;
+    inviteUrl: string | null;
+  } | null>(null);
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   const defaultPlanId = plans[0]?._id ?? "";
 
@@ -254,18 +261,46 @@ function ProvisionClinicDialog({
         billingCycle: values.billingCycle,
         ownerEmail: values.ownerEmail || undefined,
       });
+      const inviteUrl = result.ownerInviteToken
+        ? `${window.location.origin}/invite/${result.ownerInviteToken}`
+        : null;
       toast.success(
-        `Provisioned /c/${result.slug} with default dental services & Clinic Admin invite.`
+        `Provisioned /c/${result.slug} with default chair OP-1 & 6 dental services.`
       );
       form.reset();
-      setOpen(false);
+      if (inviteUrl) {
+        setCopiedInvite(false);
+        setProvisionedResult({ slug: result.slug, inviteUrl });
+      } else {
+        setOpen(false);
+      }
     } catch (err) {
       toast.error(getErrorMessage(err, "Failed to provision clinic."));
     }
   };
 
+  const handleCopyInviteLink = async () => {
+    if (!provisionedResult?.inviteUrl) return;
+    try {
+      await navigator.clipboard.writeText(provisionedResult.inviteUrl);
+      setCopiedInvite(true);
+      toast.success("Clinic Admin invitation link copied.");
+    } catch {
+      toast.error("Could not copy link to clipboard.");
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) {
+          setProvisionedResult(null);
+          setCopiedInvite(false);
+        }
+      }}
+    >
       <DialogTrigger
         render={
           <Button className="h-9 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white hover:bg-[#5B4BD6]" />
@@ -276,12 +311,77 @@ function ProvisionClinicDialog({
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Provision New Dental Clinic</DialogTitle>
+          <DialogTitle>
+            {provisionedResult
+              ? "Clinic Provisioned Successfully"
+              : "Provision New Dental Clinic"}
+          </DialogTitle>
           <DialogDescription>
-            Creates the tenant, seeds the 6-service dental catalog and operating
-            hours, and sends a 7-day Clinic Admin invitation.
+            {provisionedResult
+              ? "Share or copy the Clinic Admin invitation link below. An email has also been queued via Resend."
+              : "Creates the tenant, seeds Operatory Chair 1 (OP-1), the 6-service dental catalog, and operating hours, and sends a 7-day Clinic Admin invitation."}
           </DialogDescription>
         </DialogHeader>
+
+        {provisionedResult ? (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-950">
+              <p className="font-semibold">
+                Tenant <span className="font-mono">/c/{provisionedResult.slug}</span>{" "}
+                is ready!
+              </p>
+              <p className="mt-1 text-emerald-900/80">
+                Operatory Chair 1 (OP-1) and 6 standard dental procedures have
+                been seeded automatically.
+              </p>
+            </div>
+
+            {provisionedResult.inviteUrl ? (
+              <div className="space-y-1.5">
+                <Label>Clinic Admin Invitation Link</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={provisionedResult.inviteUrl}
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleCopyInviteLink}
+                    className="shrink-0"
+                  >
+                    {copiedInvite ? (
+                      <>
+                        <Check className="mr-1.5 size-3.5 text-emerald-600" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="mr-1.5 size-3.5" />
+                        Copy
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                onClick={() => {
+                  setProvisionedResult(null);
+                  setOpen(false);
+                }}
+                className="bg-[#6C5CE7] text-white hover:bg-[#5B4BD6]"
+              >
+                Done
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+        <>
 
         {plans.length === 0 ? (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
@@ -541,6 +641,8 @@ function ProvisionClinicDialog({
             </Button>
           </DialogFooter>
         </form>
+        </>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -627,14 +729,31 @@ function ClinicDetailSheet({
 
   const handleStatusChange = async (newStatus: ClinicStatus) => {
     if (!clinicId) return;
+    if (
+      (newStatus === "suspended" || newStatus === "archived") &&
+      typeof window !== "undefined"
+    ) {
+      const confirmed = window.confirm(
+        `Set ${detail?.clinic.name ?? "this clinic"} to "${newStatus}"? Clinic staff will immediately be restricted to Read-Only Mode and public bookings on /c/${detail?.clinic.slug ?? ""} will be blocked.`
+      );
+      if (!confirmed) return;
+    }
     setBusy(true);
     try {
-      await updateStatus({
+      const res = await updateStatus({
         clinicId,
         status: newStatus,
         reason: statusReason || undefined,
       });
-      toast.success(`Clinic status updated to ${newStatus.replace("_", " ")}.`);
+      if (newStatus === "active" && res.isSubscriptionExpired) {
+        toast.warning(
+          "Clinic marked active, but its subscription end date is in the past. Record a payment or extend days to prevent auto past-due."
+        );
+      } else {
+        toast.success(
+          `Clinic status updated to ${newStatus.replace("_", " ")}.`
+        );
+      }
       setStatusReason("");
     } catch (err) {
       toast.error(getErrorMessage(err, "Could not update clinic status."));

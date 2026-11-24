@@ -22,12 +22,18 @@ const isProtected = createRouteMatcher([
   ...["/super-admin", "/admin", "/front-desk", "/staff", "/patient"].map((p) => `${p}(.*)`),
 ]);
 
-/** Reads the role from the Clerk session token (custom claim `role`, or `metadata.role`). */
+/** Reads the role from the Clerk session token (`role`, `metadata.role`, or `public_metadata.role`). */
 function roleFromClaims(claims: Record<string, unknown> | null): Role | undefined {
   if (!claims) return undefined;
   const direct = claims.role;
   const nested = (claims.metadata as { role?: unknown } | undefined)?.role;
-  const role = typeof direct === "string" && direct ? direct : nested;
+  const pubMeta = (claims.public_metadata as { role?: unknown } | undefined)?.role;
+  const role =
+    typeof direct === "string" && direct
+      ? direct
+      : typeof nested === "string" && nested
+        ? nested
+        : pubMeta;
   return typeof role === "string" && role ? (role as Role) : undefined;
 }
 

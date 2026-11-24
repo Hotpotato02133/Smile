@@ -61,10 +61,10 @@ export const listClinics = query({
       ? await ctx.db
         .query("clinics")
         .withIndex("by_status", (q) => q.eq("status", args.status!))
-        .collect()
-      : await ctx.db.query("clinics").collect();
+        .take(500)
+      : await ctx.db.query("clinics").take(500);
 
-    const plans = await ctx.db.query("subscriptionPlans").collect();
+    const plans = await ctx.db.query("subscriptionPlans").take(50);
     const planMap = new Map<Id<"subscriptionPlans">, Doc<"subscriptionPlans">>(
       plans.map((p) => [p._id, p])
     );
@@ -241,7 +241,7 @@ export const createClinic = mutation({
       subscriptionEndsAt,
       featureFlags: { ...plan.defaultFeatures },
       activeDentistCount: 0,
-      activeChairCount: 0,
+      activeChairCount: 1,
       currentMonthKey: toManilaMonthKey(now),
       currentMonthAppointmentCount: 0,
       currentMonthEmailCount: 0,
@@ -253,6 +253,15 @@ export const createClinic = mutation({
       operatingHours: DEFAULT_OPERATING_HOURS,
       createdAt: now,
       updatedAt: now,
+    });
+
+    // Seed 1 default operatory chair so the clinic is immediately ready for scheduling
+    await ctx.db.insert("chairs", {
+      clinicId,
+      name: "Operatory Chair 1",
+      roomCode: "OP-1",
+      supportedCategoryTags: ["General"],
+      isActive: true,
     });
 
     // Seed default dental service catalog for the newly provisioned clinic
@@ -273,8 +282,10 @@ export const createClinic = mutation({
     }
 
     const inviteEmail = args.ownerEmail?.trim().toLowerCase() || email;
+    let ownerInviteToken: string | null = null;
     if (inviteEmail) {
       const inviteToken = generateInviteToken();
+      ownerInviteToken = inviteToken;
       const invitationId = await ctx.db.insert("staffInvitations", {
         clinicId,
         email: inviteEmail,
@@ -306,10 +317,11 @@ export const createClinic = mutation({
         planCode: plan.code,
         billingCycle: isTrial ? "trial" : args.billingCycle,
         ownerInviteEmail: inviteEmail,
+        defaultChairSeeded: "OP-1",
       },
     });
 
-    return { clinicId, slug };
+    return { clinicId, slug, ownerInviteToken };
   },
 });
 
@@ -342,6 +354,25 @@ export const updateClinicStatus = mutation({
       updatedAt: now,
     });
 
+    if (
+      (args.status === "past_due" || args.status === "suspended") &&
+      previousStatus !== args.status &&
+      clinic.email
+    ) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notifications.sendSubscriptionStatusAlert,
+        {
+          clinicId: clinic._id,
+          clinicName: clinic.name,
+          clinicEmail: clinic.email,
+          newStatus: args.status,
+          subscriptionEndsAt: clinic.subscriptionEndsAt,
+          gracePeriodEndsAt,
+        }
+      );
+    }
+
     await recordAuditLog(ctx, {
       actorUserId: actor._id,
       actorRole: actor.role,
@@ -360,7 +391,11 @@ export const updateClinicStatus = mutation({
       },
     });
 
-    return { clinicId: args.clinicId, status: args.status };
+    return {
+      clinicId: args.clinicId,
+      status: args.status,
+      isSubscriptionExpired: args.status === "active" && clinic.subscriptionEndsAt < now,
+    };
   },
 });
 
@@ -689,6 +724,67 @@ export const extendClinicSubscription = mutation({
   },
 });
 
+export const sendRenewalReminder = mutation({
+  args: {
+    clinicId: v.id("clinics"),
+    customNote: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+
+    const clinic = await ctx.db.get(args.clinicId);
+    if (!clinic) {
+      throw new ConvexError({ code: "NOT_FOUND", message: "Clinic not found." });
+    }
+    if (!clinic.email?.trim()) {
+      throw new ConvexError({
+        code: "INVALID_INPUT",
+        message: "This clinic has no contact email configured.",
+      });
+    }
+
+    const plan = await ctx.db.get(clinic.planId);
+    const amountPhp =
+      clinic.billingCycle === "annual"
+        ? (plan?.annualPricePhp ?? 0)
+        : (plan?.monthlyPricePhp ?? 0);
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.sendClinicRenewalReminderEmail,
+      {
+        clinicId: clinic._id,
+        clinicName: clinic.name,
+        clinicEmail: clinic.email,
+        clinicTimezone: clinic.timezone,
+        planName: plan?.name ?? "Smile Plan",
+        status: clinic.status,
+        amountPhp,
+        billingCycle: clinic.billingCycle,
+        subscriptionEndsAt: clinic.subscriptionEndsAt,
+        customNote: args.customNote?.trim() || undefined,
+      }
+    );
+
+    await recordAuditLog(ctx, {
+      actorUserId: actor._id,
+      actorRole: actor.role,
+      clinicId: clinic._id,
+      actionType: "SUBSCRIPTION_RENEWAL_REMINDER_SENT",
+      targetEntity: "clinics",
+      targetId: clinic._id,
+      metadata: {
+        clinicName: clinic.name,
+        sentTo: clinic.email,
+        status: clinic.status,
+        subscriptionEndsAt: clinic.subscriptionEndsAt,
+      },
+    });
+
+    return { clinicId: clinic._id, sentTo: clinic.email };
+  },
+});
+
 export const listAnnouncements = query({
   args: { activeOnly: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
@@ -940,7 +1036,7 @@ export const listAuditActors = query({
   handler: async (ctx) => {
     await requireSuperAdmin(ctx);
 
-    const [superAdmins, clinicAdmins] = await Promise.all([
+    const [superAdmins, clinicAdmins, dentists, receptionists] = await Promise.all([
       ctx.db
         .query("users")
         .withIndex("by_role", (q) => q.eq("role", "super_admin"))
@@ -949,14 +1045,24 @@ export const listAuditActors = query({
         .query("users")
         .withIndex("by_role", (q) => q.eq("role", "clinic_admin"))
         .take(100),
+      ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", "dentist"))
+        .take(100),
+      ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", "receptionist"))
+        .take(100),
     ]);
 
-    return [...superAdmins, ...clinicAdmins].map((u) => ({
-      _id: u._id,
-      name: `${u.firstName} ${u.lastName}`.trim() || u.email,
-      email: u.email,
-      role: u.role,
-    }));
+    return [...superAdmins, ...clinicAdmins, ...dentists, ...receptionists].map(
+      (u) => ({
+        _id: u._id,
+        name: `${u.firstName} ${u.lastName}`.trim() || u.email,
+        email: u.email,
+        role: u.role,
+      })
+    );
   },
 });
 

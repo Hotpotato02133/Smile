@@ -213,6 +213,7 @@ function ConnectedSidebarFooter({
 
   const storagePct = freeTier?.storage.percentUsed ?? 0;
   const emailPct = freeTier?.emails.percentUsed ?? 0;
+  const mauPct = freeTier?.clerkMau.percentUsed ?? 0;
 
   return (
     <div className="space-y-3">
@@ -265,6 +266,29 @@ function ConnectedSidebarFooter({
                 )}
                 style={{
                   width: `${emailPct === 0 ? 0 : Math.min(100, Math.max(emailPct, 2))}%`,
+                }}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>Clerk MAU</span>
+              <span className="tabular-nums font-medium text-slate-700">
+                {mauPct}%
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-[width]",
+                  mauPct >= 85
+                    ? "bg-rose-500"
+                    : mauPct >= 65
+                      ? "bg-amber-500"
+                      : "bg-emerald-600"
+                )}
+                style={{
+                  width: `${mauPct === 0 ? 0 : Math.min(100, Math.max(mauPct, 2))}%`,
                 }}
               />
             </div>
