@@ -3,6 +3,7 @@ import { Resend } from "resend";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import {
+  type ActionCtx,
   internalAction,
   internalMutation,
   internalQuery,
@@ -145,7 +146,96 @@ export const getAppointmentEmailContext = internalQuery({
   },
 });
 
-/** Low-level Resend dispatch action with strict per-clinic & global quota enforcement. */
+type ActiveEmailProvider =
+  | { kind: "resend"; apiKey: string; from: string }
+  | { kind: "gmail_smtp" }
+  | { kind: "none" };
+
+/**
+ * Selects the best configured email transport:
+ * 1. Resend with a verified custom domain (`RESEND_FROM_EMAIL` not using `@resend.dev`).
+ * 2. Free Gmail SMTP (`GMAIL_USER` + `GMAIL_APP_PASSWORD`) — sends to any recipient at $0.
+ * 3. Resend sandbox fallback (`onboarding@resend.dev`) when only `RESEND_API_KEY` is set.
+ */
+function resolveEmailProvider(): ActiveEmailProvider {
+  const resendApiKey = process.env.RESEND_API_KEY?.trim() ?? "";
+  const resendFrom = process.env.RESEND_FROM_EMAIL?.trim() ?? "";
+  const hasVerifiedResendDomain =
+    Boolean(resendApiKey) &&
+    Boolean(resendFrom) &&
+    !resendFrom.toLowerCase().includes("@resend.dev");
+
+  if (hasVerifiedResendDomain) {
+    return { kind: "resend", apiKey: resendApiKey, from: resendFrom };
+  }
+
+  const gmailUser = process.env.GMAIL_USER?.trim() ?? "";
+  const gmailAppPassword =
+    process.env.GMAIL_APP_PASSWORD?.replace(/\s+/g, "") ?? "";
+  if (gmailUser && gmailAppPassword) {
+    return { kind: "gmail_smtp" };
+  }
+
+  if (resendApiKey) {
+    return {
+      kind: "resend",
+      apiKey: resendApiKey,
+      from: resendFrom || "Smile Dental <onboarding@resend.dev>",
+    };
+  }
+
+  return { kind: "none" };
+}
+
+async function dispatchEmail(
+  ctx: ActionCtx,
+  payload: {
+    to: string;
+    subject: string;
+    html: string;
+    text: string;
+    fromName?: string;
+  }
+): Promise<EmailDispatchResult> {
+  const provider = resolveEmailProvider();
+
+  if (provider.kind === "none") {
+    return { sent: false, reason: "EMAIL_PROVIDER_NOT_CONFIGURED" };
+  }
+
+  if (provider.kind === "gmail_smtp") {
+    return await ctx.runAction(internal.emailSender.sendViaGmailSmtp, {
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
+      fromName: payload.fromName,
+    });
+  }
+
+  try {
+    const resend = new Resend(provider.apiKey);
+    const result = await resend.emails.send({
+      from: provider.from,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
+    });
+
+    if (result.error) {
+      return { sent: false, reason: result.error.message };
+    }
+    return { sent: true, id: result.data?.id ?? null };
+  } catch (err) {
+    return {
+      sent: false,
+      reason: err instanceof Error ? err.message : "Email dispatch failed.",
+    };
+  }
+}
+
+/** Low-level email dispatch action with strict per-clinic & global quota enforcement. */
 export const sendClinicEmail = internalAction({
   args: {
     clinicId: v.id("clinics"),
@@ -153,6 +243,7 @@ export const sendClinicEmail = internalAction({
     subject: v.string(),
     html: v.string(),
     text: v.string(),
+    fromName: v.optional(v.string()),
     skipQuotaCheck: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<EmailDispatchResult> => {
@@ -161,9 +252,9 @@ export const sendClinicEmail = internalAction({
       return { sent: false, reason: "INVALID_RECIPIENT" };
     }
 
-    const apiKey = process.env.RESEND_API_KEY?.trim();
-    if (!apiKey) {
-      return { sent: false, reason: "RESEND_NOT_CONFIGURED" };
+    const provider = resolveEmailProvider();
+    if (provider.kind === "none") {
+      return { sent: false, reason: "EMAIL_PROVIDER_NOT_CONFIGURED" };
     }
 
     if (!args.skipQuotaCheck) {
@@ -176,23 +267,13 @@ export const sendClinicEmail = internalAction({
       }
     }
 
-    const resend = new Resend(apiKey);
-    const from =
-      process.env.RESEND_FROM_EMAIL?.trim() ||
-      "Smile Dental <onboarding@resend.dev>";
-
-    const result = await resend.emails.send({
-      from,
+    return await dispatchEmail(ctx, {
       to: recipient,
       subject: args.subject,
       html: args.html,
       text: args.text,
+      fromName: args.fromName,
     });
-
-    if (result.error) {
-      return { sent: false, reason: result.error.message };
-    }
-    return { sent: true, id: result.data?.id ?? null };
   },
 });
 
@@ -551,42 +632,35 @@ export const sendRoleInvitationEmail = internalAction({
       declineUrl,
     });
 
-    const apiKey = process.env.RESEND_API_KEY?.trim();
-    if (!apiKey) {
+    const provider = resolveEmailProvider();
+    if (provider.kind === "none") {
       await ctx.runMutation(internal.notifications.markInvitationEmailStatus, {
         invitationId: args.invitationId,
         emailStatus: "skipped",
-        emailError: "RESEND_API_KEY not configured — share invite link manually.",
+        emailError:
+          "Email delivery not configured (set GMAIL_USER + GMAIL_APP_PASSWORD or RESEND_API_KEY in Convex) — share invite link manually.",
       });
-      return { sent: false, reason: "RESEND_NOT_CONFIGURED" };
+      return { sent: false, reason: "EMAIL_PROVIDER_NOT_CONFIGURED" };
     }
 
-    let dispatchResult: EmailDispatchResult;
-    if (clinic) {
-      dispatchResult = await ctx.runAction(internal.notifications.sendClinicEmail, {
-        clinicId: clinic._id,
-        to: invitation.email,
-        subject: template.subject,
-        html: template.html,
-        text: template.text,
-        skipQuotaCheck: true,
-      });
-    } else {
-      const resend = new Resend(apiKey);
-      const from =
-        process.env.RESEND_FROM_EMAIL?.trim() ||
-        "Smile Dental <onboarding@resend.dev>";
-      const res = await resend.emails.send({
-        from,
-        to: invitation.email,
-        subject: template.subject,
-        html: template.html,
-        text: template.text,
-      });
-      dispatchResult = res.error
-        ? { sent: false, reason: res.error.message }
-        : { sent: true, id: res.data?.id ?? null };
-    }
+    const fromName = clinic?.name ?? "Smile Dental";
+    const dispatchResult: EmailDispatchResult = clinic
+      ? await ctx.runAction(internal.notifications.sendClinicEmail, {
+          clinicId: clinic._id,
+          to: invitation.email,
+          subject: template.subject,
+          html: template.html,
+          text: template.text,
+          fromName,
+          skipQuotaCheck: true,
+        })
+      : await dispatchEmail(ctx, {
+          to: invitation.email,
+          subject: template.subject,
+          html: template.html,
+          text: template.text,
+          fromName,
+        });
 
     await ctx.runMutation(internal.notifications.markInvitationEmailStatus, {
       invitationId: args.invitationId,

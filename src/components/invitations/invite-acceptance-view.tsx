@@ -1,7 +1,7 @@
 "use client";
 
-import { useClerk, useSession, useUser } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAuth, useClerk, useSession, useUser } from "@clerk/nextjs";
+import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -81,6 +81,7 @@ const ROLE_META: Record<
 function ConnectedInviteView({ token }: { token: string }) {
   const router = useRouter();
   const { isAuthenticated, isLoading: convexAuthLoading } = useConvexAuth();
+  const { getToken } = useAuth();
   const { user, isLoaded: clerkLoaded } = useUser();
   const { session } = useSession();
   const { signOut } = useClerk();
@@ -112,7 +113,7 @@ function ConnectedInviteView({ token }: { token: string }) {
     token,
     nowMs: nowMs > 0 ? nowMs : undefined,
   });
-  const acceptInvitation = useMutation(api.invitations.acceptInvitation);
+  const acceptInvitation = useAction(api.invitations.acceptInvitationWithFallback);
   const declineInvitation = useMutation(api.invitations.declineInvitation);
 
   const signedInEmail = (
@@ -140,10 +141,11 @@ function ConnectedInviteView({ token }: { token: string }) {
       });
       toast.success(`Role activated! Redirecting to your workspace…`);
 
-      // Refresh Clerk session token so edge proxy reads the updated role claim
+      // Refresh Clerk session token so edge proxy reads the updated role & clinicId claims
       try {
         await user?.reload();
         await session?.reload();
+        await getToken({ skipCache: true });
       } catch {
         // Fallback: /post-login resolves directly from Convex if claim is still syncing
       }

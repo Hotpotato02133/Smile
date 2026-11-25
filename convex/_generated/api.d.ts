@@ -13,6 +13,7 @@ import type * as availability from "../availability.js";
 import type * as clinicAdmin from "../clinicAdmin.js";
 import type * as cronJobs from "../cronJobs.js";
 import type * as crons from "../crons.js";
+import type * as emailSender from "../emailSender.js";
 import type * as emails_templates from "../emails/templates.js";
 import type * as files from "../files.js";
 import type * as http from "../http.js";
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   clinicAdmin: typeof clinicAdmin;
   cronJobs: typeof cronJobs;
   crons: typeof crons;
+  emailSender: typeof emailSender;
   "emails/templates": typeof emails_templates;
   files: typeof files;
   http: typeof http;

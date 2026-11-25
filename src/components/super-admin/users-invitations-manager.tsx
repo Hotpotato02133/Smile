@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +38,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -216,6 +225,15 @@ export function UsersInvitationsManager() {
   const [editActive, setEditActive] = useState<boolean>(true);
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Remove/Revoke invitation confirmation dialog state
+  const [removingInvite, setRemovingInvite] = useState<{
+    _id: Id<"staffInvitations">;
+    email: string;
+    role: AssignableRole;
+    clinicName: string | null;
+  } | null>(null);
+  const [removing, setRemoving] = useState(false);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setNowMs(Date.now());
@@ -343,12 +361,17 @@ export function UsersInvitationsManager() {
     }
   };
 
-  const handleRevoke = async (invitationId: Id<"staffInvitations">) => {
+  const handleConfirmRemove = async () => {
+    if (!removingInvite) return;
+    setRemoving(true);
     try {
-      await revokeInvitation({ invitationId });
-      toast.success("Invitation revoked.");
+      await revokeInvitation({ invitationId: removingInvite._id });
+      toast.success(`Invitation for ${removingInvite.email} removed.`);
+      setRemovingInvite(null);
     } catch (err) {
-      toast.error(getErrorMessage(err, "Could not revoke invitation."));
+      toast.error(getErrorMessage(err, "Could not remove invitation."));
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -613,13 +636,60 @@ export function UsersInvitationsManager() {
                                     Sending…
                                   </span>
                                 ) : inv.emailStatus === "failed" ? (
-                                  <span
-                                    title={inv.emailError ?? "Delivery failed"}
-                                    className="inline-flex items-center gap-1 text-xs font-medium text-rose-700"
-                                  >
-                                    <MailWarning className="size-3.5" />
-                                    Failed
-                                  </span>
+                                  <Popover>
+                                    <PopoverTrigger
+                                      type="button"
+                                      className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-rose-200/80 transition-colors hover:bg-rose-100"
+                                    >
+                                      <MailWarning className="size-3.5" />
+                                      Failed
+                                    </PopoverTrigger>
+                                    <PopoverContent
+                                      align="start"
+                                      className="w-80 space-y-2.5 p-3.5"
+                                    >
+                                      <PopoverHeader>
+                                        <PopoverTitle className="text-xs font-semibold text-rose-800">
+                                          Email delivery failed
+                                        </PopoverTitle>
+                                        <PopoverDescription className="text-xs leading-relaxed text-slate-600">
+                                          {inv.emailError ??
+                                            "Resend rejected this email. Please check your sender configuration."}
+                                        </PopoverDescription>
+                                      </PopoverHeader>
+                                      {inv.emailError?.includes("resend.com/domains") ? (
+                                        <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-900">
+                                          Set{" "}
+                                          <code className="font-mono font-semibold">
+                                            GMAIL_USER
+                                          </code>{" "}
+                                          &amp;{" "}
+                                          <code className="font-mono font-semibold">
+                                            GMAIL_APP_PASSWORD
+                                          </code>{" "}
+                                          in Convex for free delivery to any recipient (no domain needed), or verify a Resend domain and set{" "}
+                                          <code className="font-mono font-semibold">
+                                            RESEND_FROM_EMAIL
+                                          </code>
+                                          .
+                                        </p>
+                                      ) : null}
+                                      {inv.token && inv.status === "pending" ? (
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() =>
+                                            copyLink(inv.token!, inv._id)
+                                          }
+                                          className="h-7 w-full rounded-full border-slate-200 text-xs"
+                                        >
+                                          <Copy className="mr-1.5 size-3" />
+                                          Copy Direct Invite Link
+                                        </Button>
+                                      ) : null}
+                                    </PopoverContent>
+                                  </Popover>
                                 ) : (
                                   <span
                                     title={
@@ -669,7 +739,16 @@ export function UsersInvitationsManager() {
                                     <Button
                                       size="sm"
                                       variant="ghost"
-                                      onClick={() => handleRevoke(inv._id)}
+                                      aria-label={`Remove invitation for ${inv.email}`}
+                                      title="Remove invitation"
+                                      onClick={() =>
+                                        setRemovingInvite({
+                                          _id: inv._id,
+                                          email: inv.email,
+                                          role: inv.role,
+                                          clinicName: inv.clinicName,
+                                        })
+                                      }
                                       className="h-7 rounded-full px-2 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700"
                                     >
                                       <Trash2 className="size-3.5" />
@@ -722,10 +801,23 @@ export function UsersInvitationsManager() {
 
                           <div className="mt-2.5 flex flex-wrap items-center gap-2">
                             <RoleBadge role={inv.role} />
-                            <span className="text-[11px] text-slate-500">
+                            <span
+                              className={cn(
+                                "text-[11px]",
+                                inv.emailStatus === "failed"
+                                  ? "font-medium text-rose-700"
+                                  : "text-slate-500"
+                              )}
+                            >
                               Email: {inv.emailStatus}
                             </span>
                           </div>
+
+                          {inv.emailStatus === "failed" && inv.emailError ? (
+                            <p className="mt-2 rounded-lg border border-rose-200/80 bg-rose-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-rose-800">
+                              {inv.emailError}
+                            </p>
+                          ) : null}
 
                           {inv.declineReason ? (
                             <p className="mt-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-800">
@@ -759,10 +851,18 @@ export function UsersInvitationsManager() {
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                onClick={() => handleRevoke(inv._id)}
+                                onClick={() =>
+                                  setRemovingInvite({
+                                    _id: inv._id,
+                                    email: inv.email,
+                                    role: inv.role,
+                                    clinicName: inv.clinicName,
+                                  })
+                                }
                                 className="h-7 rounded-full px-2.5 text-xs text-rose-700"
                               >
-                                Revoke
+                                <Trash2 className="mr-1 size-3" />
+                                Remove
                               </Button>
                             ) : null}
                           </div>
@@ -988,8 +1088,8 @@ export function UsersInvitationsManager() {
                 {ROLE_BADGE_STYLE[lastCreatedLink.role].label})
               </p>
               <p className="mt-1 text-emerald-900/80">
-                Email delivery is queued via Resend. You can also copy the
-                direct invite link below:
+                Email delivery is queued. You can also copy the direct invite
+                link below:
               </p>
               <div className="mt-2.5 flex items-center gap-2">
                 <Input
@@ -1302,6 +1402,42 @@ export function UsersInvitationsManager() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* REMOVE INVITATION CONFIRMATION (YES / NO) */}
+      <ConfirmDialog
+        open={removingInvite !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemovingInvite(null);
+        }}
+        title="Remove Invitation"
+        description={
+          <>
+            Are you sure you want to remove this invitation
+            {removingInvite ? (
+              <>
+                {" "}
+                for{" "}
+                <strong className="font-mono text-slate-900">
+                  {removingInvite.email}
+                </strong>{" "}
+                ({ROLE_BADGE_STYLE[removingInvite.role].label}
+                {removingInvite.clinicName
+                  ? ` · ${removingInvite.clinicName}`
+                  : ""}
+                )
+              </>
+            ) : null}
+            ? The invitation link will be revoked immediately and can no longer
+            be accepted.
+          </>
+        }
+        cancelLabel="No"
+        confirmLabel="Yes"
+        confirmingLabel="Removing…"
+        destructive
+        isPending={removing}
+        onConfirm={handleConfirmRemove}
+      />
     </div>
   );
 }

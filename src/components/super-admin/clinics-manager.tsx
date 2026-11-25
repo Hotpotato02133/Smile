@@ -32,6 +32,7 @@ import {
 } from "@/components/super-admin/status-badges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -682,6 +683,10 @@ function ClinicDetailSheet({
     "trial" | "monthly" | "annual" | null
   >(null);
   const [busy, setBusy] = useState(false);
+  const [removingInvite, setRemovingInvite] = useState<{
+    _id: Id<"staffInvitations">;
+    email: string;
+  } | null>(null);
 
   const selectedPlanId = planOverride ?? detail?.clinic.planId ?? "";
   const selectedCycle = cycleOverride ?? detail?.clinic.billingCycle ?? "monthly";
@@ -833,13 +838,15 @@ function ClinicDetailSheet({
     }
   };
 
-  const handleRevokeInvite = async (invitationId: Id<"staffInvitations">) => {
+  const handleConfirmRevokeInvite = async () => {
+    if (!removingInvite) return;
     setBusy(true);
     try {
-      await revokeInvite({ invitationId });
-      toast.success("Pending invitation revoked.");
+      await revokeInvite({ invitationId: removingInvite._id });
+      toast.success(`Invitation for ${removingInvite.email} removed.`);
+      setRemovingInvite(null);
     } catch (err) {
-      toast.error(getErrorMessage(err, "Failed to revoke invitation."));
+      toast.error(getErrorMessage(err, "Failed to remove invitation."));
     } finally {
       setBusy(false);
     }
@@ -1200,7 +1207,12 @@ function ClinicDetailSheet({
                             size="sm"
                             variant="ghost"
                             disabled={busy}
-                            onClick={() => handleRevokeInvite(inv._id)}
+                            onClick={() =>
+                              setRemovingInvite({
+                                _id: inv._id,
+                                email: inv.email,
+                              })
+                            }
                             className="h-7 rounded-full px-2.5 text-xs text-rose-700 hover:bg-rose-50 hover:text-rose-800"
                           >
                             <Trash2 className="mr-1 size-3" />
@@ -1458,6 +1470,36 @@ function ClinicDetailSheet({
           </div>
         )}
       </SheetContent>
+
+      <ConfirmDialog
+        open={removingInvite !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemovingInvite(null);
+        }}
+        title="Remove Invitation"
+        description={
+          <>
+            Are you sure you want to remove this invitation
+            {removingInvite ? (
+              <>
+                {" "}
+                for{" "}
+                <strong className="font-mono text-slate-900">
+                  {removingInvite.email}
+                </strong>
+              </>
+            ) : null}
+            ? The invitation link will be revoked immediately and can no longer
+            be accepted.
+          </>
+        }
+        cancelLabel="No"
+        confirmLabel="Yes"
+        confirmingLabel="Removing…"
+        destructive
+        isPending={busy}
+        onConfirm={handleConfirmRevokeInvite}
+      />
     </Sheet>
   );
 }
