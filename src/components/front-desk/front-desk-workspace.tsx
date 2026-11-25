@@ -1,7 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useMutation, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { endOfWeek, format, startOfWeek } from "date-fns";
 import {
   AlertTriangle,
@@ -206,6 +206,7 @@ function ConnectedFrontDesk({
 }: {
   overrideClinicId?: Id<"clinics">;
 }) {
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const [todayRefMs] = useState<number>(() => Date.now());
   const [selectedDate, setSelectedDate] = useState<Date>(() => {
     const d = new Date();
@@ -264,12 +265,17 @@ function ConnectedFrontDesk({
     return { rangeStartKey: dateKey, rangeEndKey: dateKey };
   }, [calendarView, selectedDate, dateKey]);
 
-  const workspace = useQuery(api.appointments.getFrontDeskWorkspace, {
-    dateKey,
-    rangeStartKey,
-    rangeEndKey,
-    overrideClinicId,
-  });
+  const workspace = useQuery(
+    api.appointments.getFrontDeskWorkspace,
+    isAuthenticated
+      ? {
+          dateKey,
+          rangeStartKey,
+          rangeEndKey,
+          overrideClinicId,
+        }
+      : "skip"
+  );
 
   const transitionStatus = useMutation(api.appointments.transitionStatus);
   const sendManualWaitlistOffer = useMutation(
@@ -352,7 +358,31 @@ function ConnectedFrontDesk({
     setWalkInOpen(true);
   };
 
-  if (workspace === undefined) {
+  if (!authLoading && !isAuthenticated) {
+    return (
+      <main className="mx-auto flex w-full max-w-md flex-1 items-center p-6">
+        <Alert className="p-5">
+          <ShieldCheck className="size-4" />
+          <AlertTitle>Sign in required</AlertTitle>
+          <AlertDescription className="mt-2 space-y-3">
+            <p className="text-xs text-slate-600">
+              Please sign in with your clinic staff account to open the Front
+              Desk workspace.
+            </p>
+            <Button
+              size="sm"
+              render={<Link href="/sign-in?redirect_url=%2Ffront-desk" />}
+              className="rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
+            >
+              Sign In
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </main>
+    );
+  }
+
+  if (authLoading || workspace === undefined) {
     return (
       <div className="flex min-h-screen flex-1 flex-col bg-[#F6F8FB]">
         <div className="border-b border-slate-200/80 bg-white">
