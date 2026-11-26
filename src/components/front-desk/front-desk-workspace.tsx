@@ -39,6 +39,7 @@ import {
 } from "react";
 import type { View } from "react-big-calendar";
 import { toast } from "sonner";
+import { AccountDeactivatedCard } from "@/components/auth/account-deactivated-card";
 import { AddWaitlistDialog } from "@/components/front-desk/add-waitlist-dialog";
 import { AppointmentActionDialog } from "@/components/front-desk/appointment-action-dialog";
 import {
@@ -173,18 +174,23 @@ class FrontDeskErrorBoundary extends Component<
 
   render() {
     if (this.state.error) {
+      const msg = getErrorMessage(
+        this.state.error,
+        "You do not have permission to access this clinic's Front Desk workspace."
+      );
+      if (
+        msg.toLowerCase().includes("deactivated") ||
+        msg.toLowerCase().includes("inactive")
+      ) {
+        return <AccountDeactivatedCard reason={msg} />;
+      }
       return (
         <main className="mx-auto flex w-full max-w-xl flex-1 items-center p-6">
           <Alert variant="destructive">
             <ShieldAlert className="size-4" />
             <AlertTitle>Front Desk access unavailable</AlertTitle>
             <AlertDescription className="mt-2 space-y-3">
-              <p>
-                {getErrorMessage(
-                  this.state.error,
-                  "You do not have permission to access this clinic's Front Desk workspace."
-                )}
-              </p>
+              <p>{msg}</p>
               <Button
                 size="sm"
                 variant="outline"

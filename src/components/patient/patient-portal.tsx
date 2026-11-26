@@ -18,7 +18,9 @@ import {
   Users,
 } from "lucide-react";
 import { cn } from "cn";
+import { AccountDeactivatedCard } from "@/components/auth/account-deactivated-card";
 import { SmileLogo } from "@/components/landing/smile-logo";
+import { getErrorMessage } from "@/lib/format";
 import { AppointmentsView } from "@/components/patient/appointments-view";
 import { FamilyHealthView } from "@/components/patient/family-health-view";
 import { OverviewView } from "@/components/patient/overview-view";
@@ -53,6 +55,9 @@ function ConnectedPatientPortal() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [familyCreateOpen, setFamilyCreateOpen] = useState(false);
   const [nowMs, setNowMs] = useState<number>(0);
+  const [deactivatedReason, setDeactivatedReason] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -66,13 +71,25 @@ function ConnectedPatientPortal() {
 
   const data = useQuery(
     api.patientPortal.getDashboardData,
-    isAuthenticated && nowMs > 0 ? { nowMs } : "skip"
+    isAuthenticated && nowMs > 0 && !deactivatedReason ? { nowMs } : "skip"
   );
 
   useEffect(() => {
-    if (isAuthenticated) {
-      void ensureUser().catch(() => {});
-    }
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    void ensureUser().catch((err: unknown) => {
+      if (cancelled) return;
+      const msg = getErrorMessage(err, "");
+      if (
+        msg.toLowerCase().includes("deactivated") ||
+        msg.toLowerCase().includes("inactive")
+      ) {
+        setDeactivatedReason(msg);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthenticated, ensureUser]);
 
   const upcomingCount = (data?.appointments ?? []).filter(
@@ -91,6 +108,10 @@ function ConnectedPatientPortal() {
     setActiveTab("family");
     setFamilyCreateOpen(true);
   };
+
+  if (deactivatedReason) {
+    return <AccountDeactivatedCard reason={deactivatedReason} />;
+  }
 
   if (authLoading) {
     return (

@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { ClerkLoaded, ClerkLoading, Show, UserButton } from "@clerk/nextjs";
+import { useAuth, UserButton } from "@clerk/nextjs";
 import { ArrowUpRight, Menu } from "lucide-react";
 import { cn } from "cn";
 import { useEnvConfig } from "@/components/providers/app-providers";
@@ -88,6 +88,134 @@ function PrimaryCtaPill({
       </span>
     </Link>
   );
+}
+
+const emptySubscribe = () => () => {};
+
+function useIsHydrated(): boolean {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
+}
+
+function DesktopSignedOutControls() {
+  return (
+    <>
+      <Link
+        href="/sign-in"
+        className="inline-flex h-10 items-center rounded-full px-4 text-[14px] font-medium text-slate-700 whitespace-nowrap transition-colors duration-150 hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
+      >
+        Sign In
+      </Link>
+      <PrimaryCtaPill href="/clinics" label="Book a Visit" />
+    </>
+  );
+}
+
+function ClerkDesktopAuthControls() {
+  const hydrated = useIsHydrated();
+  const { isLoaded, isSignedIn } = useAuth();
+
+  if (hydrated && isLoaded && isSignedIn) {
+    return (
+      <>
+        <PrimaryCtaPill href="/post-login" label="Dashboard" />
+        <div className="flex items-center pl-1">
+          <UserButton />
+        </div>
+      </>
+    );
+  }
+
+  return <DesktopSignedOutControls />;
+}
+
+function MobileSignedOutControls() {
+  return (
+    <>
+      <Link
+        href="/sign-in"
+        className="hidden h-10 items-center rounded-full px-3.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7] md:inline-flex"
+      >
+        Sign In
+      </Link>
+      <PrimaryCtaPill
+        href="/clinics"
+        label="Book a Visit"
+        compact
+        className="hidden sm:inline-flex"
+      />
+      <PrimaryCtaPill
+        href="/clinics"
+        label="Book"
+        compact
+        className="sm:hidden"
+      />
+    </>
+  );
+}
+
+function ClerkMobileAuthControls() {
+  const hydrated = useIsHydrated();
+  const { isLoaded, isSignedIn } = useAuth();
+
+  if (hydrated && isLoaded && isSignedIn) {
+    return (
+      <>
+        <PrimaryCtaPill href="/post-login" label="Dashboard" compact />
+        <div className="hidden items-center sm:flex">
+          <UserButton />
+        </div>
+      </>
+    );
+  }
+
+  return <MobileSignedOutControls />;
+}
+
+function DrawerSignedOutControls({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <Link
+        href="/sign-in"
+        onClick={onNavigate}
+        className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-[#EFEBFF] hover:text-[#4F3EC7]"
+      >
+        Sign In
+      </Link>
+      <Link
+        href="/sign-up"
+        onClick={onNavigate}
+        className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
+      >
+        Sign Up
+      </Link>
+    </div>
+  );
+}
+
+function ClerkDrawerAuthControls({ onNavigate }: { onNavigate: () => void }) {
+  const hydrated = useIsHydrated();
+  const { isLoaded, isSignedIn } = useAuth();
+
+  if (hydrated && isLoaded && isSignedIn) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-full bg-white px-4 py-2">
+        <Link
+          href="/post-login"
+          onClick={onNavigate}
+          className="inline-flex h-9 flex-1 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-[#6C5CE7]"
+        >
+          Go to Dashboard
+        </Link>
+        <UserButton />
+      </div>
+    );
+  }
+
+  return <DrawerSignedOutControls onNavigate={onNavigate} />;
 }
 
 export function LandingNavbar() {
@@ -217,156 +345,12 @@ export function LandingNavbar() {
 
         {/* Right: Desktop Auth + Primary CTA */}
         <div className="hidden items-center justify-self-end gap-2 lg:flex">
-          {hasClerk ? (
-            <Suspense
-              fallback={
-                <>
-                  <Link
-                    href="/sign-in"
-                    className="inline-flex h-10 items-center rounded-full px-4 text-[14px] font-medium text-slate-700 whitespace-nowrap transition-colors duration-150 hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
-                  >
-                    Sign In
-                  </Link>
-                  <PrimaryCtaPill href="/clinics" label="Book a Visit" />
-                </>
-              }
-            >
-              <ClerkLoading>
-                <Link
-                  href="/sign-in"
-                  className="inline-flex h-10 items-center rounded-full px-4 text-[14px] font-medium text-slate-700 whitespace-nowrap transition-colors duration-150 hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
-                >
-                  Sign In
-                </Link>
-                <PrimaryCtaPill href="/clinics" label="Book a Visit" />
-              </ClerkLoading>
-              <ClerkLoaded>
-                <Show when="signed-out">
-                  <Link
-                    href="/sign-in"
-                    className="inline-flex h-10 items-center rounded-full px-4 text-[14px] font-medium text-slate-700 whitespace-nowrap transition-colors duration-150 hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
-                  >
-                    Sign In
-                  </Link>
-                  <PrimaryCtaPill href="/clinics" label="Book a Visit" />
-                </Show>
-                <Show when="signed-in">
-                  <PrimaryCtaPill href="/post-login" label="Dashboard" />
-                  <div className="flex items-center pl-1">
-                    <UserButton />
-                  </div>
-                </Show>
-              </ClerkLoaded>
-            </Suspense>
-          ) : (
-            <>
-              <Link
-                href="/sign-in"
-                className="inline-flex h-10 items-center rounded-full px-4 text-[14px] font-medium text-slate-700 whitespace-nowrap transition-colors duration-150 hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7]"
-              >
-                Sign In
-              </Link>
-              <PrimaryCtaPill href="/clinics" label="Book a Visit" />
-            </>
-          )}
+          {hasClerk ? <ClerkDesktopAuthControls /> : <DesktopSignedOutControls />}
         </div>
 
         {/* Mobile & Tablet Right Cluster */}
         <div className="flex items-center justify-self-end gap-2 lg:hidden">
-          {hasClerk ? (
-            <Suspense
-              fallback={
-                <>
-                  <PrimaryCtaPill
-                    href="/clinics"
-                    label="Book a Visit"
-                    compact
-                    className="hidden sm:inline-flex"
-                  />
-                  <PrimaryCtaPill
-                    href="/clinics"
-                    label="Book"
-                    compact
-                    className="sm:hidden"
-                  />
-                </>
-              }
-            >
-              <ClerkLoading>
-                <Link
-                  href="/sign-in"
-                  className="hidden h-10 items-center rounded-full px-3.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7] md:inline-flex"
-                >
-                  Sign In
-                </Link>
-                <PrimaryCtaPill
-                  href="/clinics"
-                  label="Book a Visit"
-                  compact
-                  className="hidden sm:inline-flex"
-                />
-                <PrimaryCtaPill
-                  href="/clinics"
-                  label="Book"
-                  compact
-                  className="sm:hidden"
-                />
-              </ClerkLoading>
-              <ClerkLoaded>
-                <Show when="signed-out">
-                  <Link
-                    href="/sign-in"
-                    className="hidden h-10 items-center rounded-full px-3.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7] md:inline-flex"
-                  >
-                    Sign In
-                  </Link>
-                  <PrimaryCtaPill
-                    href="/clinics"
-                    label="Book a Visit"
-                    compact
-                    className="hidden sm:inline-flex"
-                  />
-                  <PrimaryCtaPill
-                    href="/clinics"
-                    label="Book"
-                    compact
-                    className="sm:hidden"
-                  />
-                </Show>
-                <Show when="signed-in">
-                  <PrimaryCtaPill
-                    href="/post-login"
-                    label="Dashboard"
-                    compact
-                  />
-                  <div className="hidden items-center sm:flex">
-                    <UserButton />
-                  </div>
-                </Show>
-              </ClerkLoaded>
-            </Suspense>
-          ) : (
-            <>
-              <Link
-                href="/sign-in"
-                className="hidden h-10 items-center rounded-full px-3.5 text-sm font-medium text-slate-700 transition-colors hover:bg-[#EEF3F8] hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6C5CE7] md:inline-flex"
-              >
-                Sign In
-              </Link>
-              <PrimaryCtaPill
-                href="/clinics"
-                label="Book a Visit"
-                compact
-                className="hidden sm:inline-flex"
-              />
-              <PrimaryCtaPill
-                href="/clinics"
-                label="Book"
-                compact
-                className="sm:hidden"
-              />
-            </>
-          )}
+          {hasClerk ? <ClerkMobileAuthControls /> : <MobileSignedOutControls />}
 
           {/* Responsive Drawer Trigger (44px+ Touch Target) */}
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -466,75 +450,13 @@ export function LandingNavbar() {
                   </Link>
 
                   {hasClerk ? (
-                    <Suspense fallback={null}>
-                      <ClerkLoading>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Link
-                            href="/sign-in"
-                            onClick={() => setMobileOpen(false)}
-                            className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-[#EFEBFF] hover:text-[#4F3EC7]"
-                          >
-                            Sign In
-                          </Link>
-                          <Link
-                            href="/sign-up"
-                            onClick={() => setMobileOpen(false)}
-                            className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
-                          >
-                            Sign Up
-                          </Link>
-                        </div>
-                      </ClerkLoading>
-                      <ClerkLoaded>
-                        <Show when="signed-out">
-                          <div className="grid grid-cols-2 gap-2">
-                            <Link
-                              href="/sign-in"
-                              onClick={() => setMobileOpen(false)}
-                              className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-[#EFEBFF] hover:text-[#4F3EC7]"
-                            >
-                              Sign In
-                            </Link>
-                            <Link
-                              href="/sign-up"
-                              onClick={() => setMobileOpen(false)}
-                              className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
-                            >
-                              Sign Up
-                            </Link>
-                          </div>
-                        </Show>
-                        <Show when="signed-in">
-                          <div className="flex items-center justify-between gap-3 rounded-full bg-white px-4 py-2">
-                            <Link
-                              href="/post-login"
-                              onClick={() => setMobileOpen(false)}
-                              className="inline-flex h-9 flex-1 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-[#6C5CE7]"
-                            >
-                              Go to Dashboard
-                            </Link>
-                            <UserButton />
-                          </div>
-                        </Show>
-                      </ClerkLoaded>
-                    </Suspense>
+                    <ClerkDrawerAuthControls
+                      onNavigate={() => setMobileOpen(false)}
+                    />
                   ) : (
-                    <div className="grid grid-cols-2 gap-2">
-                      <Link
-                        href="/sign-in"
-                        onClick={() => setMobileOpen(false)}
-                        className="inline-flex h-11 items-center justify-center rounded-full bg-white px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-[#EFEBFF] hover:text-[#4F3EC7]"
-                      >
-                        Sign In
-                      </Link>
-                      <Link
-                        href="/sign-up"
-                        onClick={() => setMobileOpen(false)}
-                        className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
-                      >
-                        Sign Up
-                      </Link>
-                    </div>
+                    <DrawerSignedOutControls
+                      onNavigate={() => setMobileOpen(false)}
+                    />
                   )}
                 </div>
               </div>

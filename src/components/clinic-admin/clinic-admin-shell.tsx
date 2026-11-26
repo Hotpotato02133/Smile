@@ -31,6 +31,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { AccountDeactivatedCard } from "@/components/auth/account-deactivated-card";
 import { useEnvConfig } from "@/components/providers/app-providers";
 import { ClinicStatusBadge } from "@/components/super-admin/status-badges";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -465,26 +466,7 @@ function ClinicAdminAuthGuard({
 
   if (!user) {
     if (syncError) {
-      return (
-        <div className="mx-auto my-12 max-w-md px-4">
-          <Alert variant="destructive" className="p-6">
-            <ShieldAlert className="size-4" />
-            <AlertTitle>Account inactive or unavailable</AlertTitle>
-            <AlertDescription className="mt-2 space-y-4">
-              <p>{syncError}</p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  render={<Link href="/" />}
-                >
-                  Return Home
-                </Button>
-              </div>
-            </AlertDescription>
-          </Alert>
-        </div>
-      );
+      return <AccountDeactivatedCard reason={syncError} />;
     }
 
     return (
