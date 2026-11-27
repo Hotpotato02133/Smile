@@ -148,12 +148,17 @@ describe("Phase 3: Super Admin, Billing, Quotas & Clinic Suspension (e2e)", () =
         seededServices.push(...data);
         return { count: data.length };
       }),
+      count: jest.fn(async () => seededServices.length),
+    },
+    dentist: {
+      count: jest.fn(async () => 1),
     },
     chair: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: "chair-1",
         ...data,
       })),
+      count: jest.fn(async () => 1),
     },
     staffInvitation: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {

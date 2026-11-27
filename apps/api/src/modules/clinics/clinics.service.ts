@@ -24,6 +24,7 @@ import { AuditService } from "../audit/audit.service";
 import { ClerkService } from "../auth/clerk.service";
 import { assertClinicCanWriteResource } from "../auth/guards/clinic-quota.guard";
 import { NotificationsService } from "../notifications/notifications.service";
+import { StorageService } from "../storage/storage.service";
 import {
   serializeClinic,
   serializePlan,
@@ -51,12 +52,19 @@ export class ClinicsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly clerkService: ClerkService,
-    private readonly notifications: NotificationsService
+    private readonly notifications: NotificationsService,
+    private readonly storageService: StorageService
   ) {}
 
   async getWorkspace(tenant: TenantContext, actor: User) {
     const now = new Date();
-    const [plan, announcements] = await Promise.all([
+    const [
+      plan,
+      announcements,
+      activeChairs,
+      activeDentists,
+      activeServices,
+    ] = await Promise.all([
       this.prisma.subscriptionPlan.findUnique({
         where: { id: tenant.clinic.planId },
       }),
@@ -74,6 +82,15 @@ export class ClinicsService {
         orderBy: { createdAt: "desc" },
         take: 10,
       }),
+      this.prisma.chair.count({
+        where: { clinicId: tenant.clinicId, isActive: true },
+      }),
+      this.prisma.dentist.count({
+        where: { clinicId: tenant.clinicId, isActive: true },
+      }),
+      this.prisma.service.count({
+        where: { clinicId: tenant.clinicId, isActive: true },
+      }),
     ]);
 
     const readOnlyState = evaluateClinicReadOnlyState(
@@ -86,9 +103,26 @@ export class ClinicsService {
       tenant.isSuperAdminOverride
     );
 
+    const logoUrl = tenant.clinic.logoStorageKey
+      ? this.storageService.getPublicUrl(tenant.clinic.logoStorageKey)
+      : null;
+
     return {
       clinic: serializeClinic(tenant.clinic),
       plan: plan ? serializePlan(plan) : null,
+      logoUrl,
+      counts: {
+        activeChairs,
+        activeDentists,
+        activeServices,
+      },
+      user: {
+        id: actor.id,
+        email: actor.email,
+        firstName: actor.firstName,
+        lastName: actor.lastName,
+        role: actor.role,
+      },
       ...readOnlyState,
       isSuperAdminOverride: tenant.isSuperAdminOverride,
       announcements,

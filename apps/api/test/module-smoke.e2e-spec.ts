@@ -330,16 +330,19 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
     },
     dentist: {
       findMany: jest.fn(async () => [dentist]),
+      count: jest.fn(async () => 1),
     },
     dentistTimeOff: {
       findMany: jest.fn(async () => []),
     },
     chair: {
       findMany: jest.fn(async () => [chair]),
+      count: jest.fn(async () => 1),
     },
     service: {
       findFirst: jest.fn(async () => service),
       findMany: jest.fn(async () => [service]),
+      count: jest.fn(async () => 1),
     },
     patient: {
       findMany: jest.fn(async () => [
@@ -604,7 +607,19 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
     expect(leaderboardRes.body[0].maxAppointmentsPerMonth).toBe(2000);
   });
 
-  it("Clinic Admin endpoints return enriched billing, dentists, and staff payloads", async () => {
+  it("Clinic Admin endpoints return enriched workspace, billing, dentists, and staff payloads", async () => {
+    const workspaceRes = await request(app.getHttpServer())
+      .get("/api/v1/clinic/workspace")
+      .set("Authorization", "Bearer admin-token")
+      .expect(200);
+    expect(workspaceRes.body.counts).toEqual({
+      activeChairs: 1,
+      activeDentists: 1,
+      activeServices: 1,
+    });
+    expect(workspaceRes.body.user.role).toBe("clinic_admin");
+    expect(workspaceRes.body.logoUrl).toBeNull();
+
     const billingRes = await request(app.getHttpServer())
       .get("/api/v1/clinic/billing")
       .set("Authorization", "Bearer admin-token")
