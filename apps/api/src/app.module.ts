@@ -8,12 +8,16 @@ import { AuditModule } from "./modules/audit/audit.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { BillingModule } from "./modules/billing/billing.module";
 import { BookingsModule } from "./modules/bookings/bookings.module";
+import { ClinicalModule } from "./modules/clinical/clinical.module";
 import { ClinicsModule } from "./modules/clinics/clinics.module";
 import { HealthModule } from "./modules/health/health.module";
 import { InvitationsModule } from "./modules/invitations/invitations.module";
+import { JobsModule } from "./modules/jobs/jobs.module";
+import { NotificationsModule } from "./modules/notifications/notifications.module";
 import { PlatformAnalyticsModule } from "./modules/platform-analytics/platform-analytics.module";
 import { RealtimeModule } from "./modules/realtime/realtime.module";
 import { SchedulingModule } from "./modules/scheduling/scheduling.module";
+import { StorageModule } from "./modules/storage/storage.module";
 import { SuperAdminModule } from "./modules/super-admin/super-admin.module";
 import { UsersModule } from "./modules/users/users.module";
 import { WebhooksModule } from "./modules/webhooks/webhooks.module";
@@ -56,6 +60,8 @@ import { WebhooksModule } from "./modules/webhooks/webhooks.module";
     AuditModule,
     AuthModule,
     RealtimeModule,
+    StorageModule,
+    NotificationsModule,
     HealthModule,
     UsersModule,
     WebhooksModule,
@@ -67,6 +73,8 @@ import { WebhooksModule } from "./modules/webhooks/webhooks.module";
     SchedulingModule,
     AppointmentsModule,
     BookingsModule,
+    ClinicalModule,
+    JobsModule,
   ],
 })
 export class AppModule {}

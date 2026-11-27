@@ -1,0 +1,55 @@
+name: Smile Daily Platform Crons
+
+on:
+  schedule:
+    # 00:05 UTC (08:05 Asia/Manila) — Subscription expiry sweep & monthly counter rollover
+    - cron: "5 0 * * *"
+    # 01:00 UTC (09:00 Asia/Manila) — 24-hour appointment reminders
+    - cron: "0 1 * * *"
+    # 01:30 UTC (09:30 Asia/Manila) — 6-month hygiene recall check
+    - cron: "30 1 * * *"
+    # 16:15 UTC (00:15 Asia/Manila) — Daily clinic & platform analytics rollup
+    - cron: "15 16 * * *"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Cron job endpoint to trigger manually"
+        required: true
+        type: choice
+        options:
+          - sweep-subscriptions
+          - reminders-24h
+          - hygiene-recalls
+          - rollup-daily-analytics
+
+jobs:
+  trigger-cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine target cron job
+        id: select
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "5 0 * * *" ]; then
+            echo "job=sweep-subscriptions" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 1 * * *" ]; then
+            echo "job=reminders-24h" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "30 1 * * *" ]; then
+            echo "job=hygiene-recalls" >> "$GITHUB_OUTPUT"
+          else
+            echo "job=rollup-daily-analytics" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Invoke secured internal cron endpoint (wakes Render Free if asleep)
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$API_BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "API_BASE_URL and CRON_SECRET repository secrets must be configured."
+            exit 1
+          fi
+          curl --fail --show-error --silent --retry 3 --retry-delay 15 --max-time 90 \
+            -X POST "${API_BASE_URL%/}/api/v1/internal/cron/${{ steps.select.outputs.job }}" \
+            -H "X-Cron-Secret: ${CRON_SECRET}"

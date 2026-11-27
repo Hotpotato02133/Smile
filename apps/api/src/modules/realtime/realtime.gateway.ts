@@ -149,4 +149,17 @@ export class RealtimeGateway {
       .to(CLINIC_ROOM(params.clinicId))
       .emit("waitlist.updated", { dateKey: params.dateKey });
   }
+
+  emitOdontogramUpdated(params: {
+    clinicId: string;
+    patientId: string;
+    toothNumber: number;
+  }): void {
+    if (!this.server) return;
+    this.server.to(CLINIC_ROOM(params.clinicId)).emit("odontogram.updated", {
+      patientId: params.patientId,
+      toothNumber: params.toothNumber,
+      timestamp: Date.now(),
+    });
+  }
 }
