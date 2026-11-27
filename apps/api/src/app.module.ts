@@ -5,7 +5,12 @@ import { type AppEnv, validateEnv } from "./config/env";
 import { InfraModule } from "./infra/infra.module";
 import { AuditModule } from "./modules/audit/audit.module";
 import { AuthModule } from "./modules/auth/auth.module";
+import { BillingModule } from "./modules/billing/billing.module";
+import { ClinicsModule } from "./modules/clinics/clinics.module";
 import { HealthModule } from "./modules/health/health.module";
+import { InvitationsModule } from "./modules/invitations/invitations.module";
+import { PlatformAnalyticsModule } from "./modules/platform-analytics/platform-analytics.module";
+import { SuperAdminModule } from "./modules/super-admin/super-admin.module";
 import { UsersModule } from "./modules/users/users.module";
 import { WebhooksModule } from "./modules/webhooks/webhooks.module";
 
@@ -49,6 +54,11 @@ import { WebhooksModule } from "./modules/webhooks/webhooks.module";
     HealthModule,
     UsersModule,
     WebhooksModule,
+    SuperAdminModule,
+    BillingModule,
+    PlatformAnalyticsModule,
+    ClinicsModule,
+    InvitationsModule,
   ],
 })
 export class AppModule {}
