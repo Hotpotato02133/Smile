@@ -472,6 +472,10 @@ export function PatientIntakeStep({
 }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
+  const currentUser = useQuery(
+    api.users.current,
+    isAuthenticated ? {} : "skip"
+  );
   const profileData = useQuery(
     api.publicBooking.getMyPatientProfilesForClinic,
     isAuthenticated ? { clinicId } : "skip"
@@ -479,10 +483,10 @@ export function PatientIntakeStep({
 
   // Immediately provision Convex user row after Clerk sign-in/sign-up so new patients never stall
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && currentUser === null) {
       void ensureUser().catch(() => {});
     }
-  }, [isAuthenticated, ensureUser]);
+  }, [isAuthenticated, currentUser, ensureUser]);
 
   const [bookingForOverride, setBookingFor] = useState<
     "self" | "dependent" | null

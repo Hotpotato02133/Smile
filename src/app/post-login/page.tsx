@@ -48,12 +48,16 @@ function PostLoginRedirector() {
   }, [isAuthenticated, user, ensureUser]);
 
   useEffect(() => {
-    if (user) router.replace(ROLE_HOME[user.role]);
+    if (user && user.isActive) router.replace(ROLE_HOME[user.role]);
   }, [user, router]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace("/sign-in");
   }, [isLoading, isAuthenticated, router]);
+
+  if (user && !user.isActive) {
+    return <AccountDeactivatedCard />;
+  }
 
   if (syncError) {
     if (isDeactivatedMessage(syncError)) {

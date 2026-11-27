@@ -68,29 +68,47 @@ function ConnectedPatientPortal() {
 
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
+  const currentUser = useQuery(
+    api.users.current,
+    isAuthenticated ? {} : "skip"
+  );
+  const isDeactivated = Boolean(
+    deactivatedReason || (currentUser && !currentUser.isActive)
+  );
 
   const data = useQuery(
     api.patientPortal.getDashboardData,
-    isAuthenticated && nowMs > 0 && !deactivatedReason ? { nowMs } : "skip"
+    isAuthenticated &&
+      nowMs > 0 &&
+      currentUser !== undefined &&
+      !isDeactivated
+      ? { nowMs }
+      : "skip"
   );
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || currentUser !== null) return;
     let cancelled = false;
-    void ensureUser().catch((err: unknown) => {
-      if (cancelled) return;
-      const msg = getErrorMessage(err, "");
-      if (
-        msg.toLowerCase().includes("deactivated") ||
-        msg.toLowerCase().includes("inactive")
-      ) {
-        setDeactivatedReason(msg);
-      }
-    });
+    void ensureUser()
+      .then((res) => {
+        if (!cancelled && res && !res.isActive) {
+          setDeactivatedReason("User account is deactivated.");
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = getErrorMessage(err, "");
+        if (
+          msg.toLowerCase().includes("deactivated") ||
+          msg.toLowerCase().includes("inactive")
+        ) {
+          setDeactivatedReason(msg);
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, ensureUser]);
+  }, [isAuthenticated, currentUser, ensureUser]);
 
   const upcomingCount = (data?.appointments ?? []).filter(
     (a) =>
@@ -109,11 +127,11 @@ function ConnectedPatientPortal() {
     setFamilyCreateOpen(true);
   };
 
-  if (deactivatedReason) {
+  if (isDeactivated) {
     return <AccountDeactivatedCard reason={deactivatedReason} />;
   }
 
-  if (authLoading) {
+  if (authLoading || (isAuthenticated && currentUser === undefined)) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center bg-[#F6F8FB] p-6">
         <div className="space-y-4 text-center">

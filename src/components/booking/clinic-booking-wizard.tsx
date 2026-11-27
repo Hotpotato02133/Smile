@@ -167,6 +167,10 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
 
   const { isAuthenticated } = useConvexAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
+  const currentUser = useQuery(
+    api.users.current,
+    isAuthenticated ? {} : "skip"
+  );
 
   const portal = useQuery(api.publicBooking.getPublicClinicBySlug, {
     slug: clinicSlug,
@@ -229,12 +233,12 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
     null
   );
 
-  // Sync Clerk user to Convex immediately if signed in
+  // Sync Clerk user to Convex only when authenticated and not yet provisioned
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && currentUser === null) {
       void ensureUser().catch(() => {});
     }
-  }, [isAuthenticated, ensureUser]);
+  }, [isAuthenticated, currentUser, ensureUser]);
 
   const activeClaimEntry =
     !claimModeDismissed &&

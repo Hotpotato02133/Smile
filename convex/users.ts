@@ -253,7 +253,11 @@ export const deactivateFromClerk = internalMutation({
   },
 });
 
-/** Current signed-in user; null while the webhook has not synced them yet. */
+/**
+ * Current signed-in user; `null` only while unauthenticated or before the Clerk webhook/sync creates the row.
+ * Returns `isActive: false` for deactivated accounts so auth guards can render the deactivated state cleanly
+ * without throwing server errors into the client console.
+ */
 export const current = query({
   args: {},
   handler: async (ctx) => {
@@ -263,7 +267,7 @@ export const current = query({
       .query("users")
       .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
       .unique();
-    if (!user || !user.isActive) return null;
+    if (!user) return null;
     return {
       _id: user._id,
       email: user.email,
@@ -271,6 +275,7 @@ export const current = query({
       lastName: user.lastName,
       role: user.role,
       clinicId: user.clinicId ?? null,
+      isActive: user.isActive,
     };
   },
 });
@@ -309,10 +314,12 @@ export const ensureCurrentUser = mutation({
 
     if (existing) {
       if (!existing.isActive) {
-        throw new ConvexError({
-          code: "FORBIDDEN",
-          message: "User account is deactivated.",
-        });
+        return {
+          _id: existing._id,
+          role: existing.role,
+          clinicId: existing.clinicId ?? null,
+          isActive: false as const,
+        };
       }
       const existingEmail = existing.email.trim().toLowerCase();
       // Promote root Super Admin if SUPER_ADMIN_EMAIL was configured after sign-up
@@ -325,7 +332,12 @@ export const ensureCurrentUser = mutation({
           role: "super_admin",
           clinicId: undefined,
         });
-        return { _id: existing._id, role: "super_admin" as const, clinicId: null };
+        return {
+          _id: existing._id,
+          role: "super_admin" as const,
+          clinicId: null,
+          isActive: true as const,
+        };
       }
       // If an existing patient has a pending clinic staff invitation, auto-accept it
       if (existing.role === "patient" && existingEmail) {
@@ -385,6 +397,7 @@ export const ensureCurrentUser = mutation({
             _id: existing._id,
             role: clinicInvite.role,
             clinicId: clinicInvite.clinicId,
+            isActive: true as const,
           };
         }
       }
@@ -392,6 +405,7 @@ export const ensureCurrentUser = mutation({
         _id: existing._id,
         role: existing.role,
         clinicId: existing.clinicId ?? null,
+        isActive: true as const,
       };
     }
 
@@ -508,6 +522,7 @@ export const ensureCurrentUser = mutation({
       _id: userId,
       role,
       clinicId: clinicId ?? null,
+      isActive: true as const,
     };
   },
 });

@@ -271,9 +271,15 @@ function ConnectedFrontDesk({
     return { rangeStartKey: dateKey, rangeEndKey: dateKey };
   }, [calendarView, selectedDate, dateKey]);
 
+  const currentUser = useQuery(
+    api.users.current,
+    isAuthenticated ? {} : "skip"
+  );
+  const isDeactivated = Boolean(currentUser && !currentUser.isActive);
+
   const workspace = useQuery(
     api.appointments.getFrontDeskWorkspace,
-    isAuthenticated
+    isAuthenticated && currentUser !== undefined && !isDeactivated
       ? {
           dateKey,
           rangeStartKey,
@@ -388,7 +394,15 @@ function ConnectedFrontDesk({
     );
   }
 
-  if (authLoading || workspace === undefined) {
+  if (isDeactivated) {
+    return <AccountDeactivatedCard />;
+  }
+
+  if (
+    authLoading ||
+    (isAuthenticated && currentUser === undefined) ||
+    workspace === undefined
+  ) {
     return (
       <div className="flex min-h-screen flex-1 flex-col bg-[#F6F8FB]">
         <div className="border-b border-slate-200/80 bg-white">

@@ -6,13 +6,6 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -23,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatDateTime, getErrorMessage } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -89,8 +83,8 @@ const CONDITION_META: Record<
   },
   root_canal: {
     label: "Root Canal",
-    fill: "#7c3aed",
-    swatchClass: "bg-violet-600",
+    fill: "#6c5ce7",
+    swatchClass: "bg-[#6C5CE7]",
   },
   extraction_needed: {
     label: "Extraction Needed",
@@ -342,6 +336,16 @@ function ToothSvg({
   );
 }
 
+type MobileQuadrant = "all" | "ur" | "ul" | "lr" | "ll";
+
+const QUADRANT_TABS: { id: MobileQuadrant; label: string }[] = [
+  { id: "all", label: "Full Arch" },
+  { id: "ur", label: "UR 1–8" },
+  { id: "ul", label: "UL 9–16" },
+  { id: "lr", label: "LR 32–25" },
+  { id: "ll", label: "LL 24–17" },
+];
+
 export function Odontogram({
   patientId,
   appointmentId,
@@ -366,6 +370,7 @@ export function Odontogram({
     useState<TreatmentStatus>("existing");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  const [mobileQuadrant, setMobileQuadrant] = useState<MobileQuadrant>("all");
 
   // Build latest state map per tooth (records are sorted newest-first)
   const toothStateMap = useMemo(() => {
@@ -435,97 +440,168 @@ export function Odontogram({
 
   if (!enabled) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center gap-2 py-12 text-center text-sm text-muted-foreground">
-          <Lock className="size-6 opacity-60" />
-          <p className="font-medium text-foreground">
-            Interactive 32-Tooth Odontogram is disabled on this clinic&apos;s plan.
-          </p>
-          <p className="text-xs">
-            Upgrade to enable full surface charting and tooth history tracking.
-          </p>
-        </CardContent>
-      </Card>
+      <section className="flex flex-col items-center gap-2 rounded-2xl border border-slate-200/80 bg-white px-6 py-12 text-center text-sm text-slate-500">
+        <div className="flex size-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+          <Lock className="size-5" />
+        </div>
+        <p className="mt-1 font-semibold text-slate-900">
+          Interactive 32-Tooth Odontogram is disabled on this clinic&apos;s
+          plan.
+        </p>
+        <p className="text-xs text-slate-500">
+          Upgrade to enable full surface charting and tooth history tracking.
+        </p>
+      </section>
     );
   }
 
+  const mobileTeethForQuadrant =
+    mobileQuadrant === "ur"
+      ? { teeth: UPPER_ARCH.slice(0, 8), isUpper: true, heading: "Upper Right (1–8)" }
+      : mobileQuadrant === "ul"
+        ? { teeth: UPPER_ARCH.slice(8, 16), isUpper: true, heading: "Upper Left (9–16)" }
+        : mobileQuadrant === "lr"
+          ? { teeth: LOWER_ARCH.slice(0, 8), isUpper: false, heading: "Lower Right (32–25)" }
+          : mobileQuadrant === "ll"
+            ? { teeth: LOWER_ARCH.slice(8, 16), isUpper: false, heading: "Lower Left (24–17)" }
+            : null;
+
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">
-                Interactive 32-Tooth SVG Odontogram
-              </CardTitle>
-              <CardDescription>
-                Universal Numbering System (#1–#32). Click any surface (Mesial,
-                Distal, Occlusal, Buccal, Lingual) to record a finding.
-              </CardDescription>
-            </div>
-            <Badge variant="outline" className="font-mono">
-              Selected: Tooth #{selectedTooth} ({surface})
-            </Badge>
+      <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-slate-100 px-5 py-4">
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">
+              Interactive 32-Tooth SVG Odontogram
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Universal Numbering System (#1–#32). Click any surface (Mesial,
+              Distal, Occlusal, Buccal, Lingual) to record a finding.
+            </p>
           </div>
-        </CardHeader>
+          <Badge
+            variant="outline"
+            className="rounded-full border-[#6C5CE7]/25 bg-[#F1EEFF] px-3 py-1 font-mono text-xs font-semibold text-[#4F3EC7]"
+          >
+            Tooth #{selectedTooth} · {surface}
+          </Badge>
+        </div>
 
-        <CardContent className="space-y-5">
-          {/* Upper Arch (1-16) */}
-          <div className="space-y-2 overflow-x-auto pb-1">
-            <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Upper Right (1–8)</span>
-              <span>Upper Left (9–16)</span>
-            </div>
-            <div className="grid min-w-[660px] grid-cols-16 gap-1">
-              {UPPER_ARCH.map((num) => (
-                <ToothSvg
-                  key={num}
-                  toothNumber={num}
-                  isUpper
-                  state={
-                    toothStateMap.get(num) ?? {
-                      surfaces: {},
-                      surfaceStatuses: {},
-                    }
-                  }
-                  isSelected={selectedTooth === num}
-                  selectedSurface={surface}
-                  onSelect={handleSelectSurface}
-                />
-              ))}
-            </div>
+        <div className="space-y-5 p-4 sm:p-5">
+          {/* Mobile-Only Quadrant Quick-Zoom Pills */}
+          <div className="flex flex-wrap items-center gap-1.5 md:hidden">
+            {QUADRANT_TABS.map((q) => {
+              const active = mobileQuadrant === q.id;
+              return (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => setMobileQuadrant(q.id)}
+                  className={cn(
+                    "cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                    active
+                      ? "border-[#6C5CE7] bg-[#6C5CE7] text-white"
+                      : "border-slate-200 bg-[#F8FAFC] text-slate-700 hover:border-slate-300"
+                  )}
+                >
+                  {q.label}
+                </button>
+              );
+            })}
           </div>
 
-          <div className="border-t border-dashed" />
-
-          {/* Lower Arch (32-17) */}
-          <div className="space-y-2 overflow-x-auto pb-1">
-            <div className="grid min-w-[660px] grid-cols-16 gap-1">
-              {LOWER_ARCH.map((num) => (
-                <ToothSvg
-                  key={num}
-                  toothNumber={num}
-                  isUpper={false}
-                  state={
-                    toothStateMap.get(num) ?? {
-                      surfaces: {},
-                      surfaceStatuses: {},
+          {/* Mobile Zoomed 8-Tooth Quadrant View */}
+          {mobileTeethForQuadrant ? (
+            <div className="space-y-2.5 md:hidden">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
+                <span>{mobileTeethForQuadrant.heading}</span>
+                <span>Tap a surface to chart</span>
+              </div>
+              <div className="grid grid-cols-4 gap-2.5 rounded-xl border border-slate-200/80 bg-[#F8FAFC] p-3">
+                {mobileTeethForQuadrant.teeth.map((num) => (
+                  <ToothSvg
+                    key={num}
+                    toothNumber={num}
+                    isUpper={mobileTeethForQuadrant.isUpper}
+                    state={
+                      toothStateMap.get(num) ?? {
+                        surfaces: {},
+                        surfaceStatuses: {},
+                      }
                     }
-                  }
-                  isSelected={selectedTooth === num}
-                  selectedSurface={surface}
-                  onSelect={handleSelectSurface}
-                />
-              ))}
+                    isSelected={selectedTooth === num}
+                    selectedSurface={surface}
+                    onSelect={handleSelectSurface}
+                  />
+                ))}
+              </div>
             </div>
-            <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Lower Right (32–25)</span>
-              <span>Lower Left (24–17)</span>
+          ) : null}
+
+          {/* Full 32-Tooth Dual-Arch View (Always shown on md+, or on mobile when 'Full Arch' is active) */}
+          <div
+            className={cn(
+              "space-y-5",
+              mobileTeethForQuadrant ? "hidden md:block" : "block"
+            )}
+          >
+            {/* Upper Arch (1-16) */}
+            <div className="space-y-2 overflow-x-auto pb-1">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                <span>Upper Right (1–8)</span>
+                <span>Upper Left (9–16)</span>
+              </div>
+              <div className="grid min-w-[660px] grid-cols-16 gap-1">
+                {UPPER_ARCH.map((num) => (
+                  <ToothSvg
+                    key={num}
+                    toothNumber={num}
+                    isUpper
+                    state={
+                      toothStateMap.get(num) ?? {
+                        surfaces: {},
+                        surfaceStatuses: {},
+                      }
+                    }
+                    isSelected={selectedTooth === num}
+                    selectedSurface={surface}
+                    onSelect={handleSelectSurface}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="border-t border-dashed border-slate-200" />
+
+            {/* Lower Arch (32-17) */}
+            <div className="space-y-2 overflow-x-auto pb-1">
+              <div className="grid min-w-[660px] grid-cols-16 gap-1">
+                {LOWER_ARCH.map((num) => (
+                  <ToothSvg
+                    key={num}
+                    toothNumber={num}
+                    isUpper={false}
+                    state={
+                      toothStateMap.get(num) ?? {
+                        surfaces: {},
+                        surfaceStatuses: {},
+                      }
+                    }
+                    isSelected={selectedTooth === num}
+                    selectedSurface={surface}
+                    onSelect={handleSelectSurface}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                <span>Lower Right (32–25)</span>
+                <span>Lower Left (24–17)</span>
+              </div>
             </div>
           </div>
 
           {/* Color Legend */}
-          <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t pt-3 text-xs text-muted-foreground">
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-slate-100 pt-3.5 text-xs text-slate-600">
             {(Object.keys(CONDITION_META) as ToothCondition[]).map((key) => (
               <div key={key} className="flex items-center gap-1.5">
                 <span
@@ -539,26 +615,28 @@ export function Odontogram({
               <span>Planned Treatment</span>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Tooth Condition Recorder + Selected Tooth History */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">
+        <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white">
+          <div className="border-b border-slate-100 px-5 py-4">
+            <h3 className="text-base font-semibold text-slate-950">
               Record Finding — Tooth #{selectedTooth}
-            </CardTitle>
-            <CardDescription>
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-500">
               Saves an immutable clinical entry and updates the SVG arch in real
               time.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSave} className="space-y-3">
+            </p>
+          </div>
+          <div className="p-5">
+            <form onSubmit={handleSave} className="space-y-3.5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label>Surface</Label>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Surface
+                  </Label>
                   <Select
                     disabled={isReadOnly}
                     value={surface}
@@ -566,7 +644,7 @@ export function Odontogram({
                       if (v) setSurface(v as ToothSurface);
                     }}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full rounded-xl border-slate-200/90">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -581,7 +659,9 @@ export function Odontogram({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>Treatment Status</Label>
+                  <Label className="text-xs font-semibold text-slate-700">
+                    Treatment Status
+                  </Label>
                   <Select
                     disabled={isReadOnly}
                     value={treatmentStatus}
@@ -595,7 +675,7 @@ export function Odontogram({
                       }
                     }}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full rounded-xl border-slate-200/90">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -608,7 +688,9 @@ export function Odontogram({
               </div>
 
               <div className="space-y-1.5">
-                <Label>Condition</Label>
+                <Label className="text-xs font-semibold text-slate-700">
+                  Condition
+                </Label>
                 <Select
                   disabled={isReadOnly}
                   value={condition}
@@ -616,7 +698,7 @@ export function Odontogram({
                     if (v) setCondition(v as ToothCondition);
                   }}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full rounded-xl border-slate-200/90">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -632,11 +714,17 @@ export function Odontogram({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="tooth-notes">Clinical Notes (optional)</Label>
+                <Label
+                  htmlFor="tooth-notes"
+                  className="text-xs font-semibold text-slate-700"
+                >
+                  Clinical Notes (optional)
+                </Label>
                 <Input
                   id="tooth-notes"
                   disabled={isReadOnly}
                   placeholder="e.g., Class I occlusal caries; composite planned"
+                  className="rounded-xl border-slate-200/90"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                 />
@@ -645,66 +733,72 @@ export function Odontogram({
               <Button
                 type="submit"
                 disabled={isReadOnly || saving}
-                className="w-full"
+                className="h-10 w-full rounded-full bg-[#6C5CE7] text-xs font-semibold text-white hover:bg-[#5B4BD6]"
               >
                 {saving
                   ? "Saving to Chart…"
                   : `Save Tooth #${selectedTooth} (${surface})`}
               </Button>
             </form>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">
+        <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white">
+          <div className="border-b border-slate-100 px-5 py-4">
+            <h3 className="text-base font-semibold text-slate-950">
               Tooth #{selectedTooth} History ({selectedToothHistory.length})
-            </CardTitle>
-            <CardDescription>
+            </h3>
+            <p className="mt-0.5 text-xs text-slate-500">
               Timestamped clinical audit log for this tooth.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+            </p>
+          </div>
+          <div className="p-5">
             {selectedToothHistory.length === 0 ? (
-              <p className="py-8 text-center text-xs text-muted-foreground">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] px-4 py-10 text-center text-xs text-slate-500">
                 No clinical findings recorded for Tooth #{selectedTooth} yet.
-              </p>
+              </div>
             ) : (
-              <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+              <div className="max-h-72 space-y-2.5 overflow-y-auto pr-1">
                 {selectedToothHistory.map((entry) => (
                   <div
                     key={entry._id}
-                    className="rounded-lg border p-2.5 text-xs"
+                    className="rounded-xl border border-slate-200/85 bg-[#F8FAFC]/70 p-3 text-xs"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1.5 font-medium">
+                      <div className="flex flex-wrap items-center gap-1.5 font-semibold text-slate-900">
                         <span
                           className={`size-2.5 rounded-xs ${CONDITION_META[entry.condition].swatchClass}`}
                         />
                         <span>{CONDITION_META[entry.condition].label}</span>
-                        <Badge variant="outline" className="text-[10px]">
+                        <Badge
+                          variant="outline"
+                          className="rounded-full bg-white text-[10px]"
+                        >
                           {entry.surface ?? "WholeTooth"}
                         </Badge>
-                        <Badge variant="secondary" className="text-[10px] capitalize">
+                        <Badge
+                          variant="secondary"
+                          className="rounded-full text-[10px] capitalize"
+                        >
                           {entry.treatmentStatus}
                         </Badge>
                       </div>
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="tabular-nums text-[11px] text-slate-500">
                         {formatDateTime(entry.updatedAt)}
                       </span>
                     </div>
                     {entry.notes ? (
-                      <p className="mt-1 text-muted-foreground">{entry.notes}</p>
+                      <p className="mt-1.5 text-slate-700">{entry.notes}</p>
                     ) : null}
-                    <p className="mt-1 text-[10px] text-muted-foreground">
+                    <p className="mt-1 text-[11px] text-slate-500">
                       By {entry.recordedByDentistName}
                     </p>
                   </div>
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       </div>
     </div>
   );

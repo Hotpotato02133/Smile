@@ -224,13 +224,15 @@ export function TimeOffBlockerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto rounded-2xl border-slate-200/80 sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CalendarOff className="size-4 text-primary" />
-            Personal Time-Off & Break Blocker
+          <DialogTitle className="flex items-center gap-2 text-base font-bold text-slate-950">
+            <span className="flex size-8 items-center justify-center rounded-xl bg-[#F1EEFF] text-[#6C5CE7]">
+              <CalendarOff className="size-4" />
+            </span>
+            Personal Time-Off &amp; Break Blocker
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-xs text-slate-500">
             {timeOffData?.dentistName
               ? `Blocking time for ${timeOffData.dentistName} (${clinicTimezone}). `
               : ""}
@@ -242,7 +244,7 @@ export function TimeOffBlockerDialog({
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Quick Presets */}
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">
+            <Label className="text-xs font-semibold text-slate-600">
               Quick Presets
             </Label>
             <div className="flex flex-wrap gap-1.5">
@@ -252,6 +254,7 @@ export function TimeOffBlockerDialog({
                 variant="outline"
                 disabled={isReadOnly}
                 onClick={() => applyPreset("break30")}
+                className="h-7 rounded-full border-slate-200 bg-[#F8FAFC] px-3 text-xs font-medium text-slate-700 hover:border-[#6C5CE7]/40 hover:bg-[#F1EEFF] hover:text-[#4F3EC7]"
               >
                 30m Break
               </Button>
@@ -261,6 +264,7 @@ export function TimeOffBlockerDialog({
                 variant="outline"
                 disabled={isReadOnly}
                 onClick={() => applyPreset("break60")}
+                className="h-7 rounded-full border-slate-200 bg-[#F8FAFC] px-3 text-xs font-medium text-slate-700 hover:border-[#6C5CE7]/40 hover:bg-[#F1EEFF] hover:text-[#4F3EC7]"
               >
                 1h Break
               </Button>
@@ -270,6 +274,7 @@ export function TimeOffBlockerDialog({
                 variant="outline"
                 disabled={isReadOnly}
                 onClick={() => applyPreset("halfday")}
+                className="h-7 rounded-full border-slate-200 bg-[#F8FAFC] px-3 text-xs font-medium text-slate-700 hover:border-[#6C5CE7]/40 hover:bg-[#F1EEFF] hover:text-[#4F3EC7]"
               >
                 Half-Day Leave
               </Button>
@@ -279,6 +284,7 @@ export function TimeOffBlockerDialog({
                 variant="outline"
                 disabled={isReadOnly}
                 onClick={() => applyPreset("fullday")}
+                className="h-7 rounded-full border-slate-200 bg-[#F8FAFC] px-3 text-xs font-medium text-slate-700 hover:border-[#6C5CE7]/40 hover:bg-[#F1EEFF] hover:text-[#4F3EC7]"
               >
                 Full-Day Leave
               </Button>
@@ -288,6 +294,7 @@ export function TimeOffBlockerDialog({
                 variant="outline"
                 disabled={isReadOnly}
                 onClick={() => applyPreset("conference")}
+                className="h-7 rounded-full border-slate-200 bg-[#F8FAFC] px-3 text-xs font-medium text-slate-700 hover:border-[#6C5CE7]/40 hover:bg-[#F1EEFF] hover:text-[#4F3EC7]"
               >
                 Conference (2 Days)
               </Button>
@@ -418,7 +425,7 @@ export function TimeOffBlockerDialog({
 
           <Button
             type="submit"
-            className="w-full"
+            className="h-10 w-full rounded-full bg-[#6C5CE7] text-xs font-semibold text-white hover:bg-[#5B4BD6]"
             disabled={
               isReadOnly ||
               saving ||
@@ -436,19 +443,19 @@ export function TimeOffBlockerDialog({
         </form>
 
         {/* Scheduled Upcoming Time-Off List */}
-        <div className="space-y-2 border-t pt-4">
+        <div className="space-y-2.5 border-t border-slate-100 pt-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Upcoming & Active Blocks ({upcomingBlocks.length})
+            <h3 className="text-xs font-semibold text-slate-700">
+              Upcoming &amp; Active Blocks ({upcomingBlocks.length})
             </h3>
           </div>
 
           {timeOffData === undefined ? (
-            <p className="py-4 text-center text-xs text-muted-foreground">
+            <p className="py-4 text-center text-xs text-slate-500">
               Loading scheduled blocks…
             </p>
           ) : upcomingBlocks.length === 0 ? (
-            <p className="rounded-lg border border-dashed py-4 text-center text-xs text-muted-foreground">
+            <p className="rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] py-5 text-center text-xs text-slate-500">
               No upcoming time-off or break blocks scheduled.
             </p>
           ) : (
@@ -456,12 +463,14 @@ export function TimeOffBlockerDialog({
               {upcomingBlocks.map((block) => (
                 <div
                   key={block._id}
-                  className="flex items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs"
+                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/85 bg-[#F8FAFC] px-3.5 py-2.5 text-xs"
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-medium">{block.reason}</p>
-                    <p className="mt-0.5 inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
-                      <Clock className="size-3" />
+                    <p className="truncate font-semibold text-slate-900">
+                      {block.reason}
+                    </p>
+                    <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] tabular-nums text-slate-500">
+                      <Clock className="size-3 text-slate-400" />
                       {formatBlockRange(
                         block.startTimeUtc,
                         block.endTimeUtc,
@@ -473,11 +482,12 @@ export function TimeOffBlockerDialog({
                     <Button
                       size="icon-sm"
                       variant="ghost"
+                      className="size-7 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                       aria-label="Remove time-off block"
                       disabled={deletingId === block._id}
                       onClick={() => handleDelete(block._id)}
                     >
-                      <Trash2 className="size-3.5 text-destructive" />
+                      <Trash2 className="size-3.5" />
                     </Button>
                   ) : null}
                 </div>
@@ -487,17 +497,17 @@ export function TimeOffBlockerDialog({
 
           {pastBlocks.length > 0 ? (
             <div className="pt-2">
-              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="mb-1.5 text-xs font-medium text-slate-500">
                 Recent Past Blocks
               </p>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {pastBlocks.map((block) => (
                   <div
                     key={block._id}
-                    className="flex items-center justify-between gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                    className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-500"
                   >
                     <span className="truncate">{block.reason}</span>
-                    <span className="shrink-0 font-mono">
+                    <span className="shrink-0 tabular-nums">
                       {formatBlockRange(
                         block.startTimeUtc,
                         block.endTimeUtc,

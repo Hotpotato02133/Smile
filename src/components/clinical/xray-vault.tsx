@@ -10,18 +10,10 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -32,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { formatBytes, formatDateTime, getErrorMessage } from "@/lib/format";
 import { compressClinicalFile } from "@/lib/image-compression";
+import { cn } from "@/lib/utils";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -78,6 +71,7 @@ export function XrayVault({
   const saveClinicalFile = useMutation(api.files.saveClinicalFile);
   const deleteClinicalFile = useMutation(api.files.deleteClinicalFile);
 
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileType, setFileType] = useState<ClinicalFileType>("xray_periapical");
   const [uploading, setUploading] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] =
@@ -149,36 +143,38 @@ export function XrayVault({
 
   if (!enabled) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center gap-2 py-12 text-center text-sm text-muted-foreground">
-          <Lock className="size-6 opacity-60" />
-          <p className="font-medium text-foreground">
-            X-Ray & Intraoral Photo Vault is not enabled on this plan.
-          </p>
-          <p className="text-xs">
-            Upgrade to Smile Starter or Pro Clinic to upload compressed X-rays.
-          </p>
-        </CardContent>
-      </Card>
+      <section className="flex flex-col items-center gap-2 rounded-2xl border border-slate-200/80 bg-white px-6 py-12 text-center text-sm text-slate-500">
+        <div className="flex size-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+          <Lock className="size-5" />
+        </div>
+        <p className="mt-1 font-semibold text-slate-900">
+          X-Ray &amp; Intraoral Photo Vault is not enabled on this plan.
+        </p>
+        <p className="text-xs text-slate-500">
+          Upgrade to Smile Starter or Pro Clinic to upload compressed X-rays.
+        </p>
+      </section>
     );
   }
 
   return (
-    <Card>
-      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white">
+      <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <CardTitle className="text-base">
-            X-Ray & Intraoral Photo Vault
-          </CardTitle>
-          <CardDescription>
+          <h3 className="text-base font-semibold text-slate-950">
+            X-Ray &amp; Intraoral Photo Vault
+          </h3>
+          <p className="mt-0.5 text-xs text-slate-500">
             Images are automatically compressed client-side to WebP (max 1600px,
             ≤ 500 KB) to protect your clinic&apos;s storage quota.
-          </CardDescription>
+          </p>
         </div>
 
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="space-y-1">
-            <Label className="text-xs">File Category</Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="xray-category" className="sr-only">
+              File Category
+            </Label>
             <Select
               disabled={isReadOnly || uploading}
               value={fileType}
@@ -186,67 +182,79 @@ export function XrayVault({
                 if (v) setFileType(v as ClinicalFileType);
               }}
             >
-              <SelectTrigger className="w-44">
+              <SelectTrigger
+                id="xray-category"
+                className="h-9 w-44 rounded-full border-slate-200/90 bg-white text-xs"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="xray_periapical">Periapical X-Ray</SelectItem>
-                <SelectItem value="xray_panoramic">Panoramic X-Ray</SelectItem>
+                <SelectItem value="xray_periapical">
+                  Periapical X-Ray
+                </SelectItem>
+                <SelectItem value="xray_panoramic">
+                  Panoramic X-Ray
+                </SelectItem>
                 <SelectItem value="intraoral_photo">Intraoral Photo</SelectItem>
                 <SelectItem value="consent_form">Consent Form</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          <div className="space-y-1">
-            <Label htmlFor="clinical-upload" className="sr-only">
-              Upload X-ray or photo
-            </Label>
-            <Input
-              id="clinical-upload"
-              type="file"
-              accept="image/*,application/pdf"
-              disabled={isReadOnly || uploading || isAtQuota}
-              onChange={handleFileChange}
-              className="w-56"
-            />
-          </div>
-          {uploading ? (
-            <Upload className="mb-2 size-4 animate-pulse text-muted-foreground" />
-          ) : null}
+          <input
+            ref={fileInputRef}
+            id="clinical-upload"
+            type="file"
+            accept="image/*,application/pdf"
+            disabled={isReadOnly || uploading || isAtQuota}
+            onChange={handleFileChange}
+            className="sr-only"
+          />
+          <Button
+            type="button"
+            size="sm"
+            disabled={isReadOnly || uploading || isAtQuota}
+            onClick={() => fileInputRef.current?.click()}
+            className="h-9 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
+          >
+            <Upload className="mr-1.5 size-3.5" />
+            {uploading ? "Compressing & Uploading…" : "Upload File"}
+          </Button>
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-4">
+      <div className="space-y-4 p-5">
         {hasStorageQuota ? (
-          <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+          <div className="rounded-xl border border-slate-200/80 bg-[#F8FAFC] px-3.5 py-2.5 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 font-medium">
-                <HardDrive className="size-3.5 text-muted-foreground" />
+              <span className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
+                <HardDrive className="size-3.5 text-slate-400" />
                 Clinic Vault Storage
               </span>
               <span
-                className={`font-mono ${
+                className={cn(
+                  "tabular-nums font-semibold",
                   isAtQuota
-                    ? "font-semibold text-destructive"
+                    ? "text-rose-600"
                     : isNearQuota
-                      ? "font-semibold text-amber-600 dark:text-amber-400"
-                      : "text-muted-foreground"
-                }`}
+                      ? "text-amber-700"
+                      : "text-slate-600"
+                )}
               >
                 {formatBytes(storageUsedBytes)} / {formatBytes(maxStorageBytes)}{" "}
                 ({usagePct}%)
               </span>
             </div>
-            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80">
               <div
-                className={`h-full rounded-full transition-all ${
+                className={cn(
+                  "h-full rounded-full transition-[width] duration-200",
                   isAtQuota
-                    ? "bg-destructive"
+                    ? "bg-rose-500"
                     : isNearQuota
                       ? "bg-amber-500"
-                      : "bg-primary"
-                }`}
+                      : "bg-[#6C5CE7]"
+                )}
                 style={{ width: `${usagePct}%` }}
               />
             </div>
@@ -254,36 +262,43 @@ export function XrayVault({
         ) : null}
 
         {files.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
-            <FileImage className="size-6 opacity-50" />
-            <p>No X-rays or clinical photos uploaded for this patient yet.</p>
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] px-4 py-12 text-center">
+            <FileImage className="size-7 text-slate-300" />
+            <p className="mt-2 text-sm font-semibold text-slate-800">
+              No X-rays or clinical photos yet
+            </p>
+            <p className="mt-1 max-w-sm text-xs text-slate-500">
+              Choose a category above and tap Upload File to store periapical
+              X-rays, panoramic scans, intraoral photos, or signed consent
+              forms.
+            </p>
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
             {files.map((item) => {
               const isPdf = item.fileName.toLowerCase().endsWith(".pdf");
               const isConfirming = confirmDeleteId === item._id;
               return (
                 <div
                   key={item._id}
-                  className="flex flex-col justify-between overflow-hidden rounded-xl border bg-muted/20"
+                  className="flex flex-col justify-between overflow-hidden rounded-xl border border-slate-200/85 bg-[#F8FAFC]/60"
                 >
                   {item.url && !isPdf ? (
                     <a
                       href={item.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="block aspect-video overflow-hidden bg-black/90"
+                      className="block aspect-video overflow-hidden bg-slate-950"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={item.url}
                         alt={item.fileName}
-                        className="h-full w-full object-contain transition-transform hover:scale-105"
+                        className="h-full w-full object-contain transition-transform duration-200 hover:scale-105"
                       />
                     </a>
                   ) : (
-                    <div className="flex aspect-video flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
+                    <div className="flex aspect-video flex-col items-center justify-center gap-1 bg-slate-100 text-slate-500">
                       <FileText className="size-8" />
                       <span className="text-[11px] font-medium">
                         {isPdf ? "PDF Document" : "Clinical File"}
@@ -291,20 +306,26 @@ export function XrayVault({
                     </div>
                   )}
 
-                  <div className="space-y-2 p-3 text-xs">
+                  <div className="space-y-2 bg-white p-3 text-xs">
                     <div className="flex items-center justify-between gap-2">
-                      <Badge variant="secondary" className="text-[10px]">
+                      <Badge
+                        variant="outline"
+                        className="rounded-full border-slate-200 bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-slate-700"
+                      >
                         {FILE_TYPE_LABELS[item.fileType]}
                       </Badge>
-                      <span className="font-mono text-[11px] text-muted-foreground">
+                      <span className="tabular-nums text-[11px] text-slate-500">
                         {formatBytes(item.sizeBytes)}
                       </span>
                     </div>
-                    <p className="truncate font-medium" title={item.fileName}>
+                    <p
+                      className="truncate font-semibold text-slate-900"
+                      title={item.fileName}
+                    >
                       {item.fileName}
                     </p>
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[11px] text-muted-foreground">
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-2">
+                      <span className="tabular-nums text-[11px] text-slate-500">
                         {formatDateTime(item.createdAt)}
                       </span>
                       <div className="flex items-center gap-1">
@@ -312,6 +333,7 @@ export function XrayVault({
                           <Button
                             size="icon-sm"
                             variant="ghost"
+                            className="size-7 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-950"
                             render={
                               <a
                                 href={item.url}
@@ -330,14 +352,18 @@ export function XrayVault({
                               <Button
                                 size="xs"
                                 variant="destructive"
+                                className="rounded-full px-2.5"
                                 disabled={deletingId === item._id}
                                 onClick={() => handleDelete(item._id)}
                               >
-                                {deletingId === item._id ? "Deleting…" : "Confirm"}
+                                {deletingId === item._id
+                                  ? "Deleting…"
+                                  : "Confirm"}
                               </Button>
                               <Button
                                 size="xs"
                                 variant="ghost"
+                                className="rounded-full px-2"
                                 onClick={() => setConfirmDeleteId(null)}
                               >
                                 Cancel
@@ -347,10 +373,11 @@ export function XrayVault({
                             <Button
                               size="icon-sm"
                               variant="ghost"
+                              className="size-7 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                               aria-label="Delete file"
                               onClick={() => setConfirmDeleteId(item._id)}
                             >
-                              <Trash2 className="size-3.5 text-destructive" />
+                              <Trash2 className="size-3.5" />
                             </Button>
                           )
                         ) : null}
@@ -362,7 +389,7 @@ export function XrayVault({
             })}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

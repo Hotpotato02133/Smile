@@ -21,6 +21,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { AccountDeactivatedCard } from "@/components/auth/account-deactivated-card";
 import { SmileLogo } from "@/components/landing/smile-logo";
 import { useEnvConfig } from "@/components/providers/app-providers";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -192,7 +193,7 @@ function ConnectedSidebarFooter({
 }) {
   const { isAuthenticated } = useConvexAuth();
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
-  const isSuperAdmin = user?.role === "super_admin";
+  const isSuperAdmin = Boolean(user?.isActive && user.role === "super_admin");
   const overview = useQuery(
     api.platformAnalytics.getDashboardOverview,
     isAuthenticated && isSuperAdmin ? {} : "skip"
@@ -322,7 +323,7 @@ function ConnectedTopIdentity() {
 
   return (
     <div className="flex items-center gap-2.5">
-      {user ? (
+      {user?.isActive ? (
         <div className="hidden text-right sm:block">
           <p className="text-xs font-semibold leading-tight text-slate-950">
             {`${user.firstName} ${user.lastName}`.trim() || user.email}
@@ -397,6 +398,10 @@ function SuperAdminAuthGuard({ children }: { children: ReactNode }) {
     );
   }
 
+  if (user && !user.isActive) {
+    return <AccountDeactivatedCard />;
+  }
+
   if (!user) {
     return (
       <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 text-center">
@@ -460,9 +465,49 @@ export function SuperAdminEnvGate({ children }: { children: ReactNode }) {
   return <SuperAdminAuthGuard>{children}</SuperAdminAuthGuard>;
 }
 
+function ConnectedSuperAdminDeactivatedGate({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const { isAuthenticated } = useConvexAuth();
+  const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
+
+  if (user && !user.isActive) {
+    return <AccountDeactivatedCard />;
+  }
+
+  return <>{children}</>;
+}
+
 export function SuperAdminShell({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
   const { isConfigured } = useEnvConfig();
+
+  if (isConfigured) {
+    return (
+      <ConnectedSuperAdminDeactivatedGate>
+        <SuperAdminShellLayout isConfigured={isConfigured}>
+          {children}
+        </SuperAdminShellLayout>
+      </ConnectedSuperAdminDeactivatedGate>
+    );
+  }
+
+  return (
+    <SuperAdminShellLayout isConfigured={false}>
+      {children}
+    </SuperAdminShellLayout>
+  );
+}
+
+function SuperAdminShellLayout({
+  children,
+  isConfigured,
+}: {
+  children: ReactNode;
+  isConfigured: boolean;
+}) {
+  const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [queueCounts, setQueueCounts] = useState({ billing: 0, invites: 0 });
   const sidebarOpen = useSyncExternalStore(

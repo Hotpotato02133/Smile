@@ -464,6 +464,10 @@ function ClinicAdminAuthGuard({
     );
   }
 
+  if (user && !user.isActive) {
+    return <AccountDeactivatedCard />;
+  }
+
   if (!user) {
     if (syncError) {
       return <AccountDeactivatedCard reason={syncError} />;
