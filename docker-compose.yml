@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: smile-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smile
+      POSTGRES_PASSWORD: smile_dev_password
+      POSTGRES_DB: smile_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - smile_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smile -d smile_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: smile-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - smile_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: smile-api
+    restart: unless-stopped
+    profiles: ["full"]
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      CORS_ORIGIN: http://localhost:3000
+      DATABASE_URL: postgresql://smile:smile_dev_password@postgres:5432/smile_db?schema=public
+      DIRECT_URL: postgresql://smile:smile_dev_password@postgres:5432/smile_db?schema=public
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  smile_pg_data:
+  smile_redis_data:

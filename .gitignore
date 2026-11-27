@@ -1,7 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
-/node_modules
+**/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -11,14 +11,14 @@
 !.yarn/versions
 
 # testing
-/coverage
+**/coverage
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
+# next.js & build outputs
+**/.next/
+**/out/
+**/build/
+**/dist/
+.turbo/
 
 # misc
 .DS_Store
@@ -30,15 +30,16 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (allow committing .env.example templates)
 .env*
 !.env.example
+!**/.env.example
 
-# convex
-.convex/
+# convex (legacy reference until Phase 6 cutover)
+**/.convex/
 
 # vercel
-.vercel
+**/.vercel
 
 # typescript
 *.tsbuildinfo

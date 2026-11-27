@@ -1,0 +1,28 @@
+export const API_ERROR_CODES = {
+  UNAUTHENTICATED: "UNAUTHENTICATED",
+  FORBIDDEN: "FORBIDDEN",
+  NOT_FOUND: "NOT_FOUND",
+  INVALID_INPUT: "INVALID_INPUT",
+  CONFLICT: "CONFLICT",
+  SLOT_UNAVAILABLE: "SLOT_UNAVAILABLE",
+  QUOTA_EXCEEDED: "QUOTA_EXCEEDED",
+  CLINIC_READ_ONLY: "CLINIC_READ_ONLY",
+  SUBSCRIPTION_EXPIRED: "SUBSCRIPTION_EXPIRED",
+  FEATURE_DISABLED: "FEATURE_DISABLED",
+  FILE_TOO_LARGE: "FILE_TOO_LARGE",
+  READ_ONLY_IMPERSONATION: "READ_ONLY_IMPERSONATION",
+  RATE_LIMITED: "RATE_LIMITED",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+} as const;
+
+export type ApiErrorCode =
+  (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
+
+export interface ApiErrorResponse {
+  statusCode: number;
+  code: ApiErrorCode | string;
+  message: string;
+  details?: unknown;
+  timestamp: string;
+  path: string;
+}

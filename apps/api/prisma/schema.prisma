@@ -1,0 +1,671 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum SubscriptionPlanCode {
+  trial
+  starter
+  pro
+  enterprise
+}
+
+enum ClinicStatus {
+  trial
+  active
+  past_due
+  suspended
+  archived
+}
+
+enum BillingCycle {
+  monthly
+  annual
+  trial
+}
+
+enum PaymentBillingCycle {
+  monthly
+  annual
+}
+
+enum PaymentMethod {
+  gcash
+  maya
+  bank_transfer
+  card
+  cash
+  manual_waiver
+}
+
+enum PaymentStatus {
+  paid
+  pending
+  overdue
+  refunded
+}
+
+enum AnnouncementSeverity {
+  info
+  warning
+  critical
+}
+
+enum AnnouncementAudience {
+  all_clinic_staff
+  clinic_admins_only
+  all_users
+}
+
+enum UserRole {
+  super_admin
+  clinic_admin
+  dentist
+  receptionist
+  patient
+}
+
+enum StaffInvitationRole {
+  super_admin
+  clinic_admin
+  dentist
+  receptionist
+}
+
+enum StaffInvitationStatus {
+  pending
+  accepted
+  declined
+  revoked
+}
+
+enum EmailDeliveryStatus {
+  queued
+  sent
+  failed
+  skipped
+}
+
+enum ServiceCategory {
+  Preventive
+  Restorative
+  Cosmetic
+  Orthodontics
+  Endodontics
+  OralSurgery @map("Oral Surgery")
+  Emergency
+}
+
+enum PatientSex {
+  male
+  female
+  other
+}
+
+enum AppointmentStatus {
+  pending_approval
+  confirmed
+  checked_in
+  in_chair
+  completed
+  cancelled
+  no_show
+}
+
+enum BookingSource {
+  patient_online
+  front_desk_walk_in
+  front_desk_phone
+  dentist_followup
+  waitlist_claim
+}
+
+enum ToothSurface {
+  Mesial
+  Distal
+  Occlusal
+  Buccal
+  Lingual
+  WholeTooth
+}
+
+enum ToothCondition {
+  sound
+  caries
+  composite_filling
+  amalgam_filling
+  crown
+  root_canal
+  extraction_needed
+  missing
+  implant
+}
+
+enum TreatmentStatus {
+  existing
+  planned
+  completed
+}
+
+enum ClinicalFileType {
+  xray_periapical
+  xray_panoramic
+  intraoral_photo
+  consent_form
+}
+
+enum TimeWindow {
+  morning
+  afternoon
+  any
+}
+
+enum WaitlistStatus {
+  waiting
+  notified
+  claimed
+  expired
+}
+
+// ============================================================================
+// 1. SAAS PLATFORM & SUPER ADMIN TABLES
+// ============================================================================
+
+model SubscriptionPlan {
+  id                      String               @id @default(uuid()) @db.Uuid
+  code                    SubscriptionPlanCode @unique
+  name                    String
+  description             String
+  monthlyPricePhp         Int                  @map("monthly_price_php")
+  annualPricePhp          Int                  @map("annual_price_php")
+  trialDays               Int                  @map("trial_days")
+  maxDentists             Int                  @map("max_dentists")
+  maxChairs               Int                  @map("max_chairs")
+  maxAppointmentsPerMonth Int                  @map("max_appointments_per_month")
+  maxStorageBytes         BigInt               @map("max_storage_bytes")
+  maxEmailsPerMonth       Int                  @map("max_emails_per_month")
+  defaultFeatures         Json                 @map("default_features") @db.JsonB
+  isActive                Boolean              @default(true) @map("is_active")
+
+  clinics  Clinic[]
+  payments SubscriptionPayment[]
+
+  @@map("subscription_plans")
+}
+
+model Clinic {
+  id              String       @id @default(uuid()) @db.Uuid
+  name            String
+  slug            String       @unique
+  tagline         String?
+  logoStorageKey  String?      @map("logo_storage_key")
+  primaryColorHex String       @map("primary_color_hex")
+  email           String
+  phone           String
+  address         String
+  city            String
+  province        String
+  timezone        String       @default("Asia/Manila")
+  ownerUserId     String?      @map("owner_user_id") @db.Uuid
+
+  // SaaS Subscription & Billing State
+  planId               String       @map("plan_id") @db.Uuid
+  status               ClinicStatus
+  billingCycle         BillingCycle @map("billing_cycle")
+  trialEndsAt          DateTime?    @map("trial_ends_at") @db.Timestamptz(3)
+  subscriptionStartsAt DateTime     @map("subscription_starts_at") @db.Timestamptz(3)
+  subscriptionEndsAt   DateTime     @map("subscription_ends_at") @db.Timestamptz(3)
+  gracePeriodEndsAt    DateTime?    @map("grace_period_ends_at") @db.Timestamptz(3)
+
+  // Per-Clinic Feature Flag Overrides
+  featureFlags Json @map("feature_flags") @db.JsonB
+
+  // Live Resource Quota Counters
+  activeDentistCount           Int    @default(0) @map("active_dentist_count")
+  activeChairCount             Int    @default(0) @map("active_chair_count")
+  currentMonthKey              String @map("current_month_key")
+  currentMonthAppointmentCount Int    @default(0) @map("current_month_appointment_count")
+  currentMonthEmailCount       Int    @default(0) @map("current_month_email_count")
+  storageUsedBytes             BigInt @default(0) @map("storage_used_bytes")
+  lifetimeAppointmentCount     Int    @default(0) @map("lifetime_appointment_count")
+
+  // Scheduling Policies
+  slotIntervalMinutes          Int      @default(30) @map("slot_interval_minutes")
+  cancellationWindowHours      Int      @default(24) @map("cancellation_window_hours")
+  emergencyBufferMinutesPerDay Int      @default(0) @map("emergency_buffer_minutes_per_day")
+  requireBookingApproval       Boolean  @default(false) @map("require_booking_approval")
+  operatingHours               Json     @map("operating_hours") @db.JsonB
+  createdAt                    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  plan              SubscriptionPlan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  ownerUser         User?                 @relation("ClinicOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  users             User[]                @relation("ClinicMembers")
+  payments          SubscriptionPayment[]
+  auditLogs         PlatformAuditLog[]
+  invitations       StaffInvitation[]
+  dentists          Dentist[]
+  dentistTimeOff    DentistTimeOff[]
+  chairs            Chair[]
+  services          Service[]
+  patients          Patient[]
+  appointments      Appointment[]
+  toothRecords      ToothRecord[]
+  clinicalFiles     ClinicalFile[]
+  waitlistEntries   WaitlistEntry[]
+  dailyMetrics      ClinicMetricDaily[]
+
+  @@index([status], map: "clinics_status_idx")
+  @@index([subscriptionEndsAt], map: "clinics_subscription_end_idx")
+  @@index([planId], map: "clinics_plan_idx")
+  @@map("clinics")
+}
+
+model SubscriptionPayment {
+  id                String              @id @default(uuid()) @db.Uuid
+  clinicId          String              @map("clinic_id") @db.Uuid
+  planId            String              @map("plan_id") @db.Uuid
+  invoiceNumber     String              @unique @map("invoice_number")
+  amountPhp         Int                 @map("amount_php")
+  billingCycle      PaymentBillingCycle @map("billing_cycle")
+  paymentMethod     PaymentMethod       @map("payment_method")
+  referenceNumber   String?             @map("reference_number")
+  receiptStorageKey String?             @map("receipt_storage_key")
+  periodStart       DateTime            @map("period_start") @db.Timestamptz(3)
+  periodEnd         DateTime            @map("period_end") @db.Timestamptz(3)
+  status            PaymentStatus
+  notes             String?
+  recordedByUserId  String              @map("recorded_by_user_id") @db.Uuid
+  paidAt            DateTime?           @map("paid_at") @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  clinic         Clinic           @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  plan           SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  recordedByUser User             @relation("RecordedPayments", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, createdAt], map: "subscription_payments_clinic_created_idx")
+  @@index([status, createdAt], map: "subscription_payments_status_created_idx")
+  @@index([paidAt], map: "subscription_payments_paid_at_idx")
+  @@map("subscription_payments")
+}
+
+model PlatformMetricDaily {
+  id                       String   @id @default(uuid()) @db.Uuid
+  dateKey                  String   @unique @map("date_key")
+  totalClinics             Int      @map("total_clinics")
+  activePaidClinics        Int      @map("active_paid_clinics")
+  trialClinics             Int      @map("trial_clinics")
+  pastDueClinics           Int      @map("past_due_clinics")
+  suspendedClinics         Int      @map("suspended_clinics")
+  mrrPhp                   Int      @map("mrr_php")
+  arrPhp                   Int      @map("arr_php")
+  revenueCollectedTodayPhp Int      @map("revenue_collected_today_php")
+  totalAppointmentsBooked  Int      @map("total_appointments_booked")
+  completedAppointments    Int      @map("completed_appointments")
+  cancelledAppointments    Int      @map("cancelled_appointments")
+  noShowAppointments       Int      @map("no_show_appointments")
+  newPatientsRegistered    Int      @map("new_patients_registered")
+  totalStorageUsedBytes    BigInt   @map("total_storage_used_bytes")
+  totalEmailsSentToday     Int      @map("total_emails_sent_today")
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("platform_metrics_daily")
+}
+
+model SystemAnnouncement {
+  id              String               @id @default(uuid()) @db.Uuid
+  title           String
+  message         String
+  severity        AnnouncementSeverity
+  targetAudience  AnnouncementAudience @map("target_audience")
+  isActive        Boolean              @default(true) @map("is_active")
+  expiresAt       DateTime?            @map("expires_at") @db.Timestamptz(3)
+  createdByUserId String               @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  createdByUser User @relation("CreatedAnnouncements", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([isActive, createdAt], map: "system_announcements_active_created_idx")
+  @@map("system_announcements")
+}
+
+model PlatformAuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  actorUserId  String   @map("actor_user_id") @db.Uuid
+  actorRole    String   @map("actor_role")
+  clinicId     String?  @map("clinic_id") @db.Uuid
+  actionType   String   @map("action_type")
+  targetEntity String   @map("target_entity")
+  targetId     String   @map("target_id")
+  metadataJson String   @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actorUser User    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  clinic    Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt], map: "platform_audit_logs_created_at_idx")
+  @@index([clinicId, createdAt], map: "platform_audit_logs_clinic_created_idx")
+  @@index([actorUserId, createdAt], map: "platform_audit_logs_actor_created_idx")
+  @@map("platform_audit_logs")
+}
+
+// ============================================================================
+// 2. USERS, STAFF INVITATIONS & MULTI-TENANT ACCESS
+// ============================================================================
+
+model User {
+  id          String    @id @default(uuid()) @db.Uuid
+  clerkId     String    @unique @map("clerk_id")
+  email       String
+  firstName   String    @map("first_name")
+  lastName    String    @map("last_name")
+  phone       String?
+  avatarUrl   String?   @map("avatar_url")
+  role        UserRole  @default(patient)
+  clinicId    String?   @map("clinic_id") @db.Uuid
+  isActive    Boolean   @default(true) @map("is_active")
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  clinic               Clinic?               @relation("ClinicMembers", fields: [clinicId], references: [id], onDelete: SetNull)
+  ownedClinics         Clinic[]              @relation("ClinicOwner")
+  recordedPayments     SubscriptionPayment[] @relation("RecordedPayments")
+  createdAnnouncements SystemAnnouncement[]  @relation("CreatedAnnouncements")
+  auditLogs            PlatformAuditLog[]    @relation("AuditActor")
+  sentInvitations      StaffInvitation[]     @relation("InvitationSender")
+  dentistProfiles      Dentist[]
+  createdTimeOffs      DentistTimeOff[]      @relation("TimeOffCreator")
+  patientProfiles      Patient[]
+  createdAppointments  Appointment[]         @relation("AppointmentCreator")
+  uploadedFiles        ClinicalFile[]        @relation("FileUploader")
+
+  @@index([email], map: "users_email_idx")
+  @@index([clinicId, role], map: "users_clinic_role_idx")
+  @@index([role], map: "users_role_idx")
+  @@map("users")
+}
+
+model StaffInvitation {
+  id              String                @id @default(uuid()) @db.Uuid
+  clinicId        String?               @map("clinic_id") @db.Uuid
+  email           String
+  role            StaffInvitationRole
+  token           String?               @unique
+  inviterNote     String?               @map("inviter_note")
+  invitedByUserId String                @map("invited_by_user_id") @db.Uuid
+  status          StaffInvitationStatus @default(pending)
+  declineReason   String?               @map("decline_reason")
+  emailStatus     EmailDeliveryStatus?  @map("email_status")
+  emailError      String?               @map("email_error")
+  respondedAt     DateTime?             @map("responded_at") @db.Timestamptz(3)
+  expiresAt       DateTime              @map("expires_at") @db.Timestamptz(3)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  clinic        Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  invitedByUser User    @relation("InvitationSender", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([email, status], map: "staff_invitations_email_status_idx")
+  @@index([clinicId, status], map: "staff_invitations_clinic_status_idx")
+  @@index([status, createdAt], map: "staff_invitations_status_created_idx")
+  @@map("staff_invitations")
+}
+
+// ============================================================================
+// 3. CLINIC RESOURCES (DENTISTS, CHAIRS, SERVICES)
+// ============================================================================
+
+model Dentist {
+  id               String   @id @default(uuid()) @db.Uuid
+  clinicId         String   @map("clinic_id") @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  displayName      String   @map("display_name")
+  licenseNumber    String   @map("license_number")
+  specialties      String[]
+  bio              String?
+  calendarColorHex String   @map("calendar_color_hex")
+  defaultChairId   String?  @map("default_chair_id") @db.Uuid
+  weeklySchedule   Json     @map("weekly_schedule") @db.JsonB
+  isActive         Boolean  @default(true) @map("is_active")
+
+  clinic               Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  defaultChair         Chair?           @relation("DentistDefaultChair", fields: [defaultChairId], references: [id], onDelete: SetNull)
+  timeOffs             DentistTimeOff[]
+  appointments         Appointment[]
+  recordedToothRecords ToothRecord[]
+  preferredByWaitlist  WaitlistEntry[]
+
+  @@index([clinicId, isActive], map: "dentists_clinic_active_idx")
+  @@index([userId], map: "dentists_user_idx")
+  @@map("dentists")
+}
+
+model DentistTimeOff {
+  id              String   @id @default(uuid()) @db.Uuid
+  clinicId        String   @map("clinic_id") @db.Uuid
+  dentistId       String   @map("dentist_id") @db.Uuid
+  startTimeUtc    DateTime @map("start_time_utc") @db.Timestamptz(3)
+  endTimeUtc      DateTime @map("end_time_utc") @db.Timestamptz(3)
+  reason          String
+  createdByUserId String   @map("created_by_user_id") @db.Uuid
+
+  clinic        Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  dentist       Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+  createdByUser User    @relation("TimeOffCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, startTimeUtc], map: "dentist_time_off_clinic_start_idx")
+  @@index([dentistId, startTimeUtc], map: "dentist_time_off_dentist_start_idx")
+  @@map("dentist_time_off")
+}
+
+model Chair {
+  id                    String   @id @default(uuid()) @db.Uuid
+  clinicId              String   @map("clinic_id") @db.Uuid
+  name                  String
+  roomCode              String   @map("room_code")
+  supportedCategoryTags String[] @map("supported_category_tags")
+  isActive              Boolean  @default(true) @map("is_active")
+
+  clinic          Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  defaultDentists Dentist[]     @relation("DentistDefaultChair")
+  appointments    Appointment[]
+
+  @@index([clinicId, isActive], map: "chairs_clinic_active_idx")
+  @@map("chairs")
+}
+
+model Service {
+  id               String          @id @default(uuid()) @db.Uuid
+  clinicId         String          @map("clinic_id") @db.Uuid
+  name             String
+  category         ServiceCategory
+  description      String
+  durationMinutes  Int             @map("duration_minutes")
+  bufferMinutes    Int             @map("buffer_minutes")
+  pricePhp         Int             @map("price_php")
+  requiresXray     Boolean         @default(false) @map("requires_xray")
+  requiredChairTag String?         @map("required_chair_tag")
+  isActive         Boolean         @default(true) @map("is_active")
+
+  clinic          Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  appointments    Appointment[]
+  waitlistEntries WaitlistEntry[]
+
+  @@index([clinicId, category, isActive], map: "services_clinic_category_active_idx")
+  @@map("services")
+}
+
+// ============================================================================
+// 4. PATIENTS, APPOINTMENTS & CLINICAL ODONTOGRAM
+//    (Temporary 5-min slot locks live atomically in Redis Lua scripts.)
+// ============================================================================
+
+model Patient {
+  id                    String     @id @default(uuid()) @db.Uuid
+  clinicId              String     @map("clinic_id") @db.Uuid
+  userId                String?    @map("user_id") @db.Uuid
+  guardianPatientId     String?    @map("guardian_patient_id") @db.Uuid
+  firstName             String     @map("first_name")
+  lastName              String     @map("last_name")
+  dateOfBirth           String     @map("date_of_birth")
+  sex                   PatientSex
+  email                 String?
+  phone                 String
+  address               String?
+  emergencyContactName  String?    @map("emergency_contact_name")
+  emergencyContactPhone String?    @map("emergency_contact_phone")
+  medicalHistory        Json       @map("medical_history") @db.JsonB
+  lastCleaningDate      String?    @map("last_cleaning_date")
+  nextRecallDate        String?    @map("next_recall_date")
+  noShowCount           Int        @default(0) @map("no_show_count")
+  createdAt             DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  clinic          Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user            User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guardian        Patient?        @relation("PatientGuardian", fields: [guardianPatientId], references: [id], onDelete: SetNull)
+  dependents      Patient[]       @relation("PatientGuardian")
+  appointments    Appointment[]
+  toothRecords    ToothRecord[]
+  clinicalFiles   ClinicalFile[]
+  waitlistEntries WaitlistEntry[]
+
+  @@index([clinicId, userId], map: "patients_clinic_user_idx")
+  @@index([userId], map: "patients_user_idx")
+  @@index([clinicId, phone], map: "patients_clinic_phone_idx")
+  @@index([clinicId, nextRecallDate], map: "patients_clinic_recall_idx")
+  @@index([guardianPatientId], map: "patients_guardian_idx")
+  @@map("patients")
+}
+
+model Appointment {
+  id                    String            @id @default(uuid()) @db.Uuid
+  clinicId              String            @map("clinic_id") @db.Uuid
+  patientId             String            @map("patient_id") @db.Uuid
+  dentistId             String            @map("dentist_id") @db.Uuid
+  chairId               String            @map("chair_id") @db.Uuid
+  serviceId             String            @map("service_id") @db.Uuid
+  dateKey               String            @map("date_key")
+  startTimeUtc          DateTime          @map("start_time_utc") @db.Timestamptz(3)
+  endTimeUtc            DateTime          @map("end_time_utc") @db.Timestamptz(3)
+  bufferEndTimeUtc      DateTime          @map("buffer_end_time_utc") @db.Timestamptz(3)
+  status                AppointmentStatus
+  bookingSource         BookingSource     @map("booking_source")
+  chiefComplaint        String?           @map("chief_complaint")
+  clinicalNotes         String?           @map("clinical_notes")
+  postVisitInstructions String?           @map("post_visit_instructions")
+  reminder24hSent       Boolean           @default(false) @map("reminder_24h_sent")
+  reminder2hSent        Boolean           @default(false) @map("reminder_2h_sent")
+  cancellationReason    String?           @map("cancellation_reason")
+  createdByUserId       String?           @map("created_by_user_id") @db.Uuid
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  clinic        Clinic         @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient       Patient        @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  dentist       Dentist        @relation(fields: [dentistId], references: [id], onDelete: Restrict)
+  chair         Chair          @relation(fields: [chairId], references: [id], onDelete: Restrict)
+  service       Service        @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  createdByUser User?          @relation("AppointmentCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  toothRecords  ToothRecord[]
+  clinicalFiles ClinicalFile[]
+
+  @@index([clinicId, dateKey], map: "appointments_clinic_date_idx")
+  @@index([dentistId, startTimeUtc], map: "appointments_dentist_start_idx")
+  @@index([chairId, startTimeUtc], map: "appointments_chair_start_idx")
+  @@index([patientId, startTimeUtc], map: "appointments_patient_start_idx")
+  @@index([clinicId, status, startTimeUtc], map: "appointments_clinic_status_start_idx")
+  @@map("appointments")
+}
+
+model ToothRecord {
+  id                  String          @id @default(uuid()) @db.Uuid
+  clinicId            String          @map("clinic_id") @db.Uuid
+  patientId           String          @map("patient_id") @db.Uuid
+  toothNumber         Int             @map("tooth_number")
+  surface             ToothSurface?
+  condition           ToothCondition
+  treatmentStatus     TreatmentStatus @map("treatment_status")
+  notes               String?
+  appointmentId       String?         @map("appointment_id") @db.Uuid
+  recordedByDentistId String          @map("recorded_by_dentist_id") @db.Uuid
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  clinic            Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient           Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment       Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  recordedByDentist Dentist      @relation(fields: [recordedByDentistId], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, patientId, toothNumber], map: "tooth_records_clinic_patient_tooth_idx")
+  @@index([patientId, toothNumber], map: "tooth_records_patient_tooth_idx")
+  @@map("tooth_records")
+}
+
+model ClinicalFile {
+  id               String           @id @default(uuid()) @db.Uuid
+  clinicId         String           @map("clinic_id") @db.Uuid
+  patientId        String           @map("patient_id") @db.Uuid
+  appointmentId    String?          @map("appointment_id") @db.Uuid
+  storageKey       String           @map("storage_key")
+  fileName         String           @map("file_name")
+  fileType         ClinicalFileType @map("file_type")
+  sizeBytes        Int              @map("size_bytes")
+  uploadedByUserId String           @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient        Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  uploadedByUser User         @relation("FileUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([clinicId, patientId, createdAt], map: "clinical_files_clinic_patient_created_idx")
+  @@index([patientId, createdAt], map: "clinical_files_patient_created_idx")
+  @@map("clinical_files")
+}
+
+model WaitlistEntry {
+  id                  String         @id @default(uuid()) @db.Uuid
+  clinicId            String         @map("clinic_id") @db.Uuid
+  patientId           String         @map("patient_id") @db.Uuid
+  serviceId           String         @map("service_id") @db.Uuid
+  preferredDentistId  String?        @map("preferred_dentist_id") @db.Uuid
+  preferredDateKey    String         @map("preferred_date_key")
+  preferredTimeWindow TimeWindow     @map("preferred_time_window")
+  status              WaitlistStatus @default(waiting)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  clinic           Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patient          Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  service          Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  preferredDentist Dentist? @relation(fields: [preferredDentistId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId, preferredDateKey, status], map: "waitlist_clinic_date_status_idx")
+  @@index([patientId, createdAt], map: "waitlist_patient_created_idx")
+  @@index([status, preferredDateKey], map: "waitlist_status_date_idx")
+  @@map("waitlist")
+}
+
+model ClinicMetricDaily {
+  id                  String @id @default(uuid()) @db.Uuid
+  clinicId            String @map("clinic_id") @db.Uuid
+  dateKey             String @map("date_key")
+  totalBooked         Int    @default(0) @map("total_booked")
+  completedCount      Int    @default(0) @map("completed_count")
+  cancelledCount      Int    @default(0) @map("cancelled_count")
+  noShowCount         Int    @default(0) @map("no_show_count")
+  estimatedRevenuePhp Int    @default(0) @map("estimated_revenue_php")
+  newPatientsCount    Int    @default(0) @map("new_patients_count")
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([clinicId, dateKey], map: "clinic_metrics_daily_clinic_date_uq")
+  @@map("clinic_metrics_daily")
+}
