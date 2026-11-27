@@ -46,9 +46,13 @@ export function useApiQuery<TResult = any>(
     queryFn: async () => {
       const token =
         !endpoint.isPublic && isSignedIn ? await getToken() : undefined;
+      const method =
+        typeof endpoint.method === "function"
+          ? endpoint.method(resolvedArgs)
+          : endpoint.method;
       const raw = await executeApiRequest<TResult>({
         path: endpoint.buildPath(resolvedArgs),
-        method: endpoint.method,
+        method,
         query: endpoint.buildQuery?.(resolvedArgs),
         token,
       });
@@ -75,9 +79,13 @@ export function useApiMutation<TResult = any>(
       const resolvedArgs = args ?? {};
       const token =
         !endpoint.isPublic && isSignedIn ? await getToken() : undefined;
+      const method =
+        typeof endpoint.method === "function"
+          ? endpoint.method(resolvedArgs)
+          : endpoint.method;
       const raw = await executeApiRequest<TResult>({
         path: endpoint.buildPath(resolvedArgs),
-        method: endpoint.method,
+        method,
         query: endpoint.buildQuery?.(resolvedArgs),
         body: endpoint.buildBody ? endpoint.buildBody(resolvedArgs) : resolvedArgs,
         token,
@@ -131,6 +139,10 @@ export function useApiPaginatedQuery<TItem = any>(
       const token =
         !endpoint.isPublic && isSignedIn ? await getToken() : undefined;
       const mergedArgs = { ...resolvedArgs, limit: pageSize, offset: pageParam };
+      const method =
+        typeof endpoint.method === "function"
+          ? endpoint.method(mergedArgs)
+          : endpoint.method;
       return executeApiRequest<{
         items: TItem[];
         total: number;
@@ -138,7 +150,7 @@ export function useApiPaginatedQuery<TItem = any>(
         offset: number;
       }>({
         path: endpoint.buildPath(mergedArgs),
-        method: endpoint.method,
+        method,
         query: endpoint.buildQuery?.(mergedArgs),
         token,
       });
@@ -164,6 +176,7 @@ export function useApiPaginatedQuery<TItem = any>(
 
   const loadMore = useCallback(
     (_numItems: number) => {
+      void _numItems;
       if (query.hasNextPage && !query.isFetchingNextPage) {
         void query.fetchNextPage();
       }

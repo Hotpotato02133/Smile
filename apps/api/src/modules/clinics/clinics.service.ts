@@ -93,7 +93,7 @@ export class ClinicsService {
   }
 
   async getBillingSummary(tenant: TenantContext) {
-    const [plan, payments] = await Promise.all([
+    const [plan, payments, availablePlans] = await Promise.all([
       this.prisma.subscriptionPlan.findUnique({
         where: { id: tenant.clinic.planId },
       }),
@@ -103,12 +103,23 @@ export class ClinicsService {
         orderBy: { createdAt: "desc" },
         take: 30,
       }),
+      this.prisma.subscriptionPlan.findMany({
+        where: { isActive: true },
+        orderBy: { monthlyPricePhp: "asc" },
+      }),
     ]);
 
     return {
       clinic: serializeClinic(tenant.clinic),
       plan: plan ? serializePlan(plan) : null,
-      payments,
+      availablePlans: availablePlans.map(serializePlan),
+      payments: payments.map((p) => ({
+        ...p,
+        clinicName: tenant.clinic.name,
+        clinicSlug: tenant.clinic.slug,
+        planName: p.plan.name,
+        planCode: p.plan.code,
+      })),
     };
   }
 
@@ -193,21 +204,69 @@ export class ClinicsService {
   // ============================================================================
 
   async listDentists(tenant: TenantContext) {
-    return this.prisma.dentist.findMany({
-      where: { clinicId: tenant.clinicId },
-      include: {
-        user: {
-          select: { id: true, email: true, firstName: true, lastName: true, isActive: true },
+    const [dentistsRaw, chairs, clinicUsers] = await Promise.all([
+      this.prisma.dentist.findMany({
+        where: { clinicId: tenant.clinicId },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+              isActive: true,
+            },
+          },
+          defaultChair: { select: { id: true, name: true, roomCode: true } },
+          timeOffs: {
+            where: { endTimeUtc: { gte: new Date() } },
+            orderBy: { startTimeUtc: "asc" },
+            take: 20,
+          },
         },
-        defaultChair: { select: { id: true, name: true, roomCode: true } },
-        timeOffs: {
-          where: { endTimeUtc: { gte: new Date() } },
-          orderBy: { startTimeUtc: "asc" },
-          take: 20,
+        orderBy: { displayName: "asc" },
+      }),
+      this.prisma.chair.findMany({
+        where: { clinicId: tenant.clinicId },
+        orderBy: { name: "asc" },
+      }),
+      this.prisma.user.findMany({
+        where: {
+          clinicId: tenant.clinicId,
+          role: { in: ["dentist", "clinic_admin"] },
+          isActive: true,
         },
-      },
-      orderBy: { displayName: "asc" },
-    });
+        select: {
+          id: true,
+          clerkId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          isActive: true,
+        },
+        orderBy: { firstName: "asc" },
+      }),
+    ]);
+
+    const linkedUserIds = new Set(dentistsRaw.map((d) => d.userId));
+    const availableUsers = clinicUsers
+      .filter((u) => !u.clerkId.startsWith("pending:") && !linkedUserIds.has(u.id))
+      .map((u) => ({
+        ...u,
+        name: `${u.firstName} ${u.lastName}`.trim() || u.email,
+      }));
+
+    return {
+      dentists: dentistsRaw.map((d) => ({
+        ...d,
+        email: d.user?.email,
+        timeOff: d.timeOffs,
+        upcomingTimeOff: d.timeOffs,
+      })),
+      chairs,
+      availableUsers,
+    };
   }
 
   async createDentist(
@@ -705,7 +764,7 @@ export class ClinicsService {
   // ============================================================================
 
   async listStaff(tenant: TenantContext) {
-    const [members, invitations] = await Promise.all([
+    const [membersRaw, invitations] = await Promise.all([
       this.prisma.user.findMany({
         where: {
           clinicId: tenant.clinicId,
@@ -726,17 +785,36 @@ export class ClinicsService {
         orderBy: { createdAt: "desc" },
       }),
       this.prisma.staffInvitation.findMany({
-        where: {
-          clinicId: tenant.clinicId,
-          status: StaffInvitationStatus.pending,
-        },
+        where: { clinicId: tenant.clinicId },
         orderBy: { createdAt: "desc" },
+        take: 100,
       }),
     ]);
 
+    const members = membersRaw
+      .filter((m) => !m.clerkId.startsWith("pending:"))
+      .map((m) => ({
+        ...m,
+        name: `${m.firstName} ${m.lastName}`.trim() || m.email,
+      }));
+
+    const pendingInvitations = invitations.filter(
+      (i) => i.status === StaffInvitationStatus.pending
+    );
+    const declinedInvitations = invitations.filter(
+      (i) => i.status === StaffInvitationStatus.declined
+    );
+    const historicalInvitations = invitations.filter(
+      (i) => i.status !== StaffInvitationStatus.pending
+    );
+
     return {
-      members: members.filter((m) => !m.clerkId.startsWith("pending:")),
+      members,
+      staff: members,
       invitations,
+      pendingInvitations,
+      declinedInvitations,
+      historicalInvitations,
     };
   }
 

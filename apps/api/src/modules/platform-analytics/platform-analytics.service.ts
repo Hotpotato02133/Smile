@@ -240,6 +240,13 @@ export class PlatformAnalyticsService {
       activeAnnouncementsCount,
       pendingInvitationsCount,
       planDistribution: Array.from(planBuckets.values()),
+      statusDistribution: [
+        { status: "active", label: "Active", count: activePaidClinics },
+        { status: "trial", label: "Trial", count: trialClinics },
+        { status: "past_due", label: "Past Due", count: pastDueClinics },
+        { status: "suspended", label: "Suspended", count: suspendedClinics },
+        { status: "archived", label: "Archived", count: archivedClinics },
+      ],
       renewalQueue: renewalQueue.slice(0, 50),
       lastRollupAt: recentMetrics[0]?.updatedAt ?? null,
     };
@@ -289,42 +296,78 @@ export class PlatformAnalyticsService {
 
   async getFreeTierUsage() {
     const currentMonthKey = toManilaMonthKey();
-    const [clinicAgg, emailAgg, totalUsers] = await Promise.all([
-      this.prisma.clinic.aggregate({
-        _sum: { storageUsedBytes: true },
-        _count: { id: true },
-      }),
-      this.prisma.clinic.aggregate({
-        where: { currentMonthKey },
-        _sum: { currentMonthEmailCount: true },
-      }),
-      this.prisma.user.count({
-        where: { NOT: { clerkId: { startsWith: "pending:" } } },
-      }),
-    ]);
+    const [clinicAgg, emailAgg, totalUsers, topStorageClinics, topEmailClinics] =
+      await Promise.all([
+        this.prisma.clinic.aggregate({
+          _sum: { storageUsedBytes: true },
+          _count: { id: true },
+        }),
+        this.prisma.clinic.aggregate({
+          where: { currentMonthKey },
+          _sum: { currentMonthEmailCount: true },
+        }),
+        this.prisma.user.count({
+          where: { NOT: { clerkId: { startsWith: "pending:" } } },
+        }),
+        this.prisma.clinic.findMany({
+          orderBy: { storageUsedBytes: "desc" },
+          select: { id: true, name: true, slug: true, storageUsedBytes: true },
+          take: 5,
+        }),
+        this.prisma.clinic.findMany({
+          where: { currentMonthKey },
+          orderBy: { currentMonthEmailCount: "desc" },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            currentMonthEmailCount: true,
+          },
+          take: 5,
+        }),
+      ]);
 
     const storageUsedBytes = Number(clinicAgg._sum.storageUsedBytes ?? BigInt(0));
     const emailsUsedThisMonth = emailAgg._sum.currentMonthEmailCount ?? 0;
+    const storagePct =
+      Math.round((storageUsedBytes / R2_FREE_STORAGE_BYTES) * 10000) / 100;
+    const emailsPct =
+      Math.round((emailsUsedThisMonth / RESEND_FREE_MONTHLY_EMAILS) * 1000) / 10;
+    const usersPct =
+      Math.round((totalUsers / CLERK_FREE_MAU_LIMIT) * 1000) / 10;
 
     return {
       storage: {
         usedBytes: storageUsedBytes,
         limitBytes: R2_FREE_STORAGE_BYTES,
-        usagePct:
-          Math.round((storageUsedBytes / R2_FREE_STORAGE_BYTES) * 10000) / 100,
+        usagePct: storagePct,
+        percentUsed: storagePct,
+        topClinics: topStorageClinics.map((c) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          storageUsedBytes: Number(c.storageUsedBytes),
+        })),
       },
       emails: {
         usedThisMonth: emailsUsedThisMonth,
+        sentThisMonth: emailsUsedThisMonth,
         limitPerMonth: RESEND_FREE_MONTHLY_EMAILS,
-        usagePct:
-          Math.round((emailsUsedThisMonth / RESEND_FREE_MONTHLY_EMAILS) * 1000) /
-          10,
+        monthlyLimit: RESEND_FREE_MONTHLY_EMAILS,
+        usagePct: emailsPct,
+        percentUsed: emailsPct,
+        topClinics: topEmailClinics.map((c) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          currentMonthEmailCount: c.currentMonthEmailCount,
+        })),
       },
       users: {
         totalActive: totalUsers,
         limitMau: CLERK_FREE_MAU_LIMIT,
-        usagePct:
-          Math.round((totalUsers / CLERK_FREE_MAU_LIMIT) * 1000) / 10,
+        usagePct: usersPct,
+        percentUsed: usersPct,
       },
       totalClinics: clinicAgg._count.id,
     };

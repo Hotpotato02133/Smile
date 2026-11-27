@@ -28,17 +28,23 @@ export const updateMedicalProfileSchema = z.object({
   medicalHistory: MedicalHistorySchema,
 });
 
-export const createOnlineBookingSchema = z.object({
-  clinicSlug: z.string().trim().min(2),
-  patientId: z.string().uuid(),
-  serviceId: z.string().uuid(),
-  dentistId: z.string().uuid(),
-  chairId: z.string().uuid(),
-  dateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  startTimeUtc: z.number().int().positive(),
-  sessionId: z.string().trim().min(4).max(120),
-  chiefComplaint: z.string().trim().max(500).optional(),
-});
+export const createOnlineBookingSchema = z
+  .object({
+    clinicSlug: z.string().trim().min(2).optional(),
+    clinicId: z.string().uuid().optional(),
+    patientId: z.string().uuid(),
+    serviceId: z.string().uuid(),
+    dentistId: z.string().uuid(),
+    chairId: z.string().uuid(),
+    dateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    startTimeUtc: z.number().int().positive(),
+    sessionId: z.string().trim().min(4).max(120),
+    chiefComplaint: z.string().trim().max(500).optional(),
+  })
+  .refine((d) => Boolean(d.clinicSlug || d.clinicId), {
+    message: "Either clinicSlug or clinicId is required.",
+    path: ["clinicSlug"],
+  });
 
 export const cancelMyAppointmentSchema = z.object({
   reason: z.string().trim().max(500).optional(),
@@ -52,14 +58,20 @@ export const rescheduleMyAppointmentSchema = z.object({
   sessionId: z.string().trim().min(4).max(120).optional(),
 });
 
-export const joinWaitlistSchema = z.object({
-  clinicSlug: z.string().trim().min(2),
-  patientId: z.string().uuid(),
-  serviceId: z.string().uuid(),
-  preferredDentistId: z.string().uuid().optional(),
-  preferredDateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  preferredTimeWindow: TimeWindowSchema.default("any"),
-});
+export const joinWaitlistSchema = z
+  .object({
+    clinicSlug: z.string().trim().min(2).optional(),
+    clinicId: z.string().uuid().optional(),
+    patientId: z.string().uuid(),
+    serviceId: z.string().uuid(),
+    preferredDentistId: z.string().uuid().optional(),
+    preferredDateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    preferredTimeWindow: TimeWindowSchema.default("any"),
+  })
+  .refine((d) => Boolean(d.clinicSlug || d.clinicId), {
+    message: "Either clinicSlug or clinicId is required.",
+    path: ["clinicSlug"],
+  });
 
 export const claimWaitlistSchema = z.object({
   dentistId: z.string().uuid(),

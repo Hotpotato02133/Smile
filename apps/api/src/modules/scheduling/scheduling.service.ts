@@ -18,6 +18,9 @@ import { PrismaService } from "../../infra/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { SlotLockService } from "./slot-lock.service";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class SchedulingService {
   constructor(
@@ -25,6 +28,15 @@ export class SchedulingService {
     private readonly slotLockService: SlotLockService,
     private readonly realtime: RealtimeGateway
   ) {}
+
+  private async resolveClinicBySlugOrId(identifier: string): Promise<Clinic | null> {
+    const clean = identifier.trim();
+    if (!clean) return null;
+    if (UUID_RE.test(clean)) {
+      return this.prisma.clinic.findUnique({ where: { id: clean } });
+    }
+    return this.prisma.clinic.findUnique({ where: { slug: clean.toLowerCase() } });
+  }
 
   async computeAvailableSlots(params: {
     clinic: Clinic;
@@ -535,10 +547,10 @@ export class SchedulingService {
     dateKey: string;
     preferredDentistId?: string;
     sessionId?: string;
+    ignoreAppointmentId?: string;
+    includeEmergencyBuffer?: boolean;
   }) {
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { slug: params.slug.trim().toLowerCase() },
-    });
+    const clinic = await this.resolveClinicBySlugOrId(params.slug);
     if (!clinic) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
@@ -564,7 +576,8 @@ export class SchedulingService {
       dateKey: params.dateKey,
       preferredDentistId: params.preferredDentistId,
       ignoreSessionId: params.sessionId,
-      includeEmergencyBuffer: false,
+      ignoreAppointmentId: params.ignoreAppointmentId,
+      includeEmergencyBuffer: Boolean(params.includeEmergencyBuffer),
     });
   }
 
@@ -578,9 +591,7 @@ export class SchedulingService {
     sessionId: string;
   }) {
     const sessionId = params.sessionId.trim();
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { slug: params.slug.trim().toLowerCase() },
-    });
+    const clinic = await this.resolveClinicBySlugOrId(params.slug);
     if (!clinic) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
@@ -732,9 +743,7 @@ export class SchedulingService {
     dateKey: string,
     sessionId: string
   ) {
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { slug: slug.trim().toLowerCase() },
-    });
+    const clinic = await this.resolveClinicBySlugOrId(slug);
     if (!clinic) {
       return { released: 0 };
     }

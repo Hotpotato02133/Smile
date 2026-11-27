@@ -33,7 +33,7 @@ import type {
   TimeOffConflictsResult,
   UserDoc,
 } from "./models";
-import type { ApiEndpoint } from "./types";
+import type { ApiEndpoint, HttpMethod } from "./types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyArgs = Record<string, any>;
@@ -63,7 +63,7 @@ function queryEndpoint<TResult = AnyRecord>(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mutationEndpoint<TResult = any>(
   key: string,
-  method: "POST" | "PATCH" | "PUT" | "DELETE",
+  method: HttpMethod | ((args: AnyArgs) => HttpMethod),
   buildPath: (args: AnyArgs) => string,
   options?: {
     isPublic?: boolean;
@@ -329,7 +329,7 @@ export const api = {
     ),
     upsertPlan: mutationEndpoint(
       "subscriptions.upsertPlan",
-      "POST",
+      (a) => (a.planId ? "PUT" : "POST"),
       (a) =>
         a.planId
           ? `/api/v1/super-admin/plans/${a.planId}`
@@ -737,6 +737,8 @@ export const api = {
         buildQuery: (a) => ({
           ...overrideQuery(a),
           dateKey: a?.dateKey,
+          rangeStartKey: a?.rangeStartKey,
+          rangeEndKey: a?.rangeEndKey,
           dentistId: a?.dentistId,
         }),
       }
@@ -829,7 +831,7 @@ export const api = {
   availability: {
     getAvailableSlots: queryEndpoint<AvailableSlotsResult>(
       "availability.slots",
-      (a) => `/api/v1/public/clinics/${a.clinicSlug ?? a.slug}/slots`,
+      (a) => `/api/v1/public/clinics/${a.clinicSlug ?? a.slug ?? a.clinicId}/slots`,
       {
         isPublic: true,
         buildQuery: (a) => ({
@@ -837,6 +839,8 @@ export const api = {
           dateKey: a?.dateKey,
           preferredDentistId: a?.preferredDentistId,
           sessionId: a?.sessionId,
+          ignoreAppointmentId: a?.ignoreAppointmentId,
+          includeEmergencyBuffer: a?.includeEmergencyBuffer,
         }),
         transform: (raw) => {
           if (Array.isArray(raw)) {
@@ -856,14 +860,14 @@ export const api = {
     acquireLock: mutationEndpoint(
       "slotLocks.acquire",
       "POST",
-      (a) => `/api/v1/public/clinics/${a.clinicSlug ?? a.slug}/slot-locks`,
+      (a) => `/api/v1/public/clinics/${a.clinicSlug ?? a.slug ?? a.clinicId}/slot-locks`,
       { isPublic: true, invalidates: ["availability"] }
     ),
     releaseSessionLock: mutationEndpoint(
       "slotLocks.release",
       "DELETE",
       (a) =>
-        `/api/v1/public/clinics/${a.clinicSlug ?? a.slug}/slot-locks/${a.dateKey ?? "today"}/${a.sessionId}`,
+        `/api/v1/public/clinics/${a.clinicSlug ?? a.slug ?? a.clinicId}/slot-locks/${a.dateKey ?? "today"}/${a.sessionId}`,
       { isPublic: true, invalidates: ["availability"], buildBody: () => undefined }
     ),
   },

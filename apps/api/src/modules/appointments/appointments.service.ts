@@ -11,6 +11,7 @@ import {
 import {
   API_ERROR_CODES,
   evaluateClinicBookingEligibility,
+  evaluateClinicReadOnlyState,
   getLocalDateKeyAndMinute,
 } from "@smile/shared";
 import { DomainException } from "../../common/exceptions/domain.exception";
@@ -22,6 +23,10 @@ import { assertClinicCanWriteResource } from "../auth/guards/clinic-quota.guard"
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { SchedulingService } from "../scheduling/scheduling.service";
 import { SlotLockService } from "../scheduling/slot-lock.service";
+import {
+  serializeClinic,
+  serializePlan,
+} from "../super-admin/super-admin.service";
 import type {
   CreateWalkInBookingDto,
   RescheduleAppointmentDto,
@@ -253,10 +258,94 @@ export class AppointmentsService {
     }
   }
 
-  async getFrontDeskWorkspace(tenant: TenantContext, dateKey?: string) {
+  private enrichAppointmentItem<
+    T extends {
+      id: string;
+      patient: {
+        firstName: string;
+        lastName: string;
+        phone: string;
+        email?: string | null;
+        noShowCount?: number;
+        medicalHistory?: unknown;
+      };
+      dentist?: {
+        displayName: string;
+        calendarColorHex: string;
+      };
+      chair: {
+        name: string;
+        roomCode: string;
+      };
+      service: {
+        name: string;
+        category: ServiceCategory;
+        durationMinutes: number;
+        bufferMinutes: number;
+        pricePhp: number;
+      };
+    },
+  >(a: T) {
+    const mh = a.patient.medicalHistory as
+      | {
+          allergies?: string[];
+          isTakingBloodThinners?: boolean;
+          isPregnant?: boolean;
+          dentalAnxietyLevel?: string;
+        }
+      | null
+      | undefined;
+    const hasMedicalAlert = Boolean(
+      mh &&
+        ((mh.allergies?.length ?? 0) > 0 ||
+          mh.isTakingBloodThinners ||
+          mh.isPregnant ||
+          mh.dentalAnxietyLevel === "severe")
+    );
+    return {
+      ...a,
+      referenceCode: `SM-${a.id.slice(0, 8).toUpperCase()}`,
+      patientName: `${a.patient.firstName} ${a.patient.lastName}`.trim(),
+      patientPhone: a.patient.phone,
+      patientEmail: a.patient.email ?? null,
+      noShowCount: a.patient.noShowCount ?? 0,
+      ...(a.dentist
+        ? {
+            dentistName: a.dentist.displayName,
+            dentistColorHex: a.dentist.calendarColorHex,
+          }
+        : {}),
+      chairName: a.chair.name,
+      chairRoomCode: a.chair.roomCode,
+      serviceName: a.service.name,
+      serviceCategory: a.service.category,
+      durationMinutes: a.service.durationMinutes,
+      bufferMinutes: a.service.bufferMinutes,
+      pricePhp: a.service.pricePhp,
+      hasMedicalAlert,
+      medicalSummary: mh
+        ? {
+            allergies: mh.allergies ?? [],
+            isTakingBloodThinners: Boolean(mh.isTakingBloodThinners),
+            isPregnant: Boolean(mh.isPregnant),
+            dentalAnxietyLevel: mh.dentalAnxietyLevel ?? "none",
+          }
+        : null,
+    };
+  }
+
+  async getFrontDeskWorkspace(
+    tenant: TenantContext,
+    actor: User,
+    dateKey?: string
+  ) {
     const targetDate = dateKey?.trim() || toManilaDateKey();
-    const [appointments, dentists, chairs, services, waitlist] =
+    const now = new Date();
+    const [plan, appointmentsRaw, dentists, chairs, services, waitlist, announcements] =
       await Promise.all([
+        this.prisma.subscriptionPlan.findUnique({
+          where: { id: tenant.clinic.planId },
+        }),
         this.prisma.appointment.findMany({
           where: { clinicId: tenant.clinicId, dateKey: targetDate },
           include: {
@@ -266,6 +355,7 @@ export class AppointmentsService {
                 firstName: true,
                 lastName: true,
                 phone: true,
+                email: true,
                 noShowCount: true,
                 medicalHistory: true,
               },
@@ -314,42 +404,105 @@ export class AppointmentsService {
           },
           orderBy: { createdAt: "asc" },
         }),
+        this.prisma.systemAnnouncement.findMany({
+          where: {
+            isActive: true,
+            targetAudience: { in: ["all_users", "all_clinic_staff"] },
+            OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+          },
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        }),
       ]);
+
+    const readOnlyState = evaluateClinicReadOnlyState(
+      {
+        status: tenant.clinic.status,
+        subscriptionEndsAt: tenant.clinic.subscriptionEndsAt.getTime(),
+        gracePeriodEndsAt: tenant.clinic.gracePeriodEndsAt?.getTime() ?? null,
+      },
+      now.getTime(),
+      tenant.isSuperAdminOverride
+    );
+
+    const appointments = appointmentsRaw.map((a) => this.enrichAppointmentItem(a));
 
     return {
       dateKey: targetDate,
+      clinic: serializeClinic(tenant.clinic),
+      plan: plan ? serializePlan(plan) : null,
+      ...readOnlyState,
+      isSuperAdminOverride: tenant.isSuperAdminOverride,
+      user: {
+        id: actor.id,
+        role: actor.role,
+        firstName: actor.firstName,
+        lastName: actor.lastName,
+        email: actor.email,
+      },
       appointments,
+      pendingRequests: appointments.filter((a) => a.status === "pending_approval"),
       dentists,
       chairs,
       services,
       waitlist,
+      announcements,
     };
   }
 
   async getDentistQueue(
     tenant: TenantContext,
     actor: User,
-    params: { dateKey?: string; dentistId?: string }
+    params: {
+      dateKey?: string;
+      rangeStartKey?: string;
+      rangeEndKey?: string;
+      dentistId?: string;
+    }
   ) {
     const targetDate = params.dateKey?.trim() || toManilaDateKey();
-    const dentists = await this.prisma.dentist.findMany({
-      where: { clinicId: tenant.clinicId, isActive: true },
-      orderBy: { displayName: "asc" },
-    });
+    const rangeStart = params.rangeStartKey?.trim();
+    const rangeEnd = params.rangeEndKey?.trim();
+    const now = new Date();
+
+    const [plan, dentists, announcements] = await Promise.all([
+      this.prisma.subscriptionPlan.findUnique({
+        where: { id: tenant.clinic.planId },
+      }),
+      this.prisma.dentist.findMany({
+        where: { clinicId: tenant.clinicId, isActive: true },
+        orderBy: { displayName: "asc" },
+      }),
+      this.prisma.systemAnnouncement.findMany({
+        where: {
+          isActive: true,
+          targetAudience: { in: ["all_users", "all_clinic_staff"] },
+          OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+    ]);
 
     const ownDentist = dentists.find((d) => d.userId === actor.id);
     const selectedDentistId =
       params.dentistId ?? ownDentist?.id ?? dentists[0]?.id ?? null;
 
-    const appointments = selectedDentistId
+    const appointmentsRaw = selectedDentistId
       ? await this.prisma.appointment.findMany({
           where: {
             clinicId: tenant.clinicId,
             dentistId: selectedDentistId,
-            dateKey: targetDate,
+            dateKey:
+              rangeStart && rangeEnd
+                ? { gte: rangeStart, lte: rangeEnd }
+                : targetDate,
           },
           include: {
             patient: true,
+            dentist: {
+              select: { id: true, displayName: true, calendarColorHex: true },
+            },
             chair: { select: { id: true, name: true, roomCode: true } },
             service: true,
           },
@@ -357,11 +510,36 @@ export class AppointmentsService {
         })
       : [];
 
+    const readOnlyState = evaluateClinicReadOnlyState(
+      {
+        status: tenant.clinic.status,
+        subscriptionEndsAt: tenant.clinic.subscriptionEndsAt.getTime(),
+        gracePeriodEndsAt: tenant.clinic.gracePeriodEndsAt?.getTime() ?? null,
+      },
+      now.getTime(),
+      tenant.isSuperAdminOverride
+    );
+
+    const appointments = appointmentsRaw.map((a) => this.enrichAppointmentItem(a));
+
     return {
       dateKey: targetDate,
+      clinic: serializeClinic(tenant.clinic),
+      plan: plan ? serializePlan(plan) : null,
+      ...readOnlyState,
+      isSuperAdminOverride: tenant.isSuperAdminOverride,
+      user: {
+        id: actor.id,
+        role: actor.role,
+        firstName: actor.firstName,
+        lastName: actor.lastName,
+        email: actor.email,
+      },
       selectedDentistId,
       dentists,
       appointments,
+      queue: appointments,
+      announcements,
     };
   }
 

@@ -4,7 +4,10 @@ import type { ApiErrorResponse } from "@smile/shared";
  * Brand-compatible entity identifier type replacing Convex `Id<Table>`.
  * All backend identifiers in PostgreSQL are UUID strings.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export type Id<_Table extends string = string> = string;
+
+export type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 export class ApiClientError extends Error {
   public readonly statusCode: number;
@@ -27,7 +30,7 @@ export interface ApiEndpoint<
 > {
   readonly kind: "query" | "mutation";
   readonly key: string;
-  readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  readonly method: HttpMethod | ((args: TArgs) => HttpMethod);
   readonly isPublic?: boolean;
   readonly invalidates?: readonly string[];
   readonly buildPath: (args: TArgs) => string;

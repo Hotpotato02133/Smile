@@ -191,12 +191,50 @@ export class BookingsService {
   }
 
   async getPatientDashboard(user: User) {
-    const patientIds = await this.getOwnedPatientIds(user.id);
+    const now = new Date();
+    const [patientIds, featuredClinicsRaw, announcements] = await Promise.all([
+      this.getOwnedPatientIds(user.id),
+      this.prisma.clinic.findMany({
+        where: { status: { in: ["active", "trial", "past_due"] } },
+        orderBy: { name: "asc" },
+        take: 12,
+      }),
+      this.prisma.systemAnnouncement.findMany({
+        where: {
+          isActive: true,
+          targetAudience: "all_users",
+          OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+    ]);
+
+    const featuredClinics = featuredClinicsRaw.map((c) => ({
+      id: c.id,
+      name: c.name,
+      slug: c.slug,
+      tagline: c.tagline,
+      city: c.city,
+      province: c.province,
+      primaryColorHex: c.primaryColorHex,
+      logoUrl: c.logoStorageKey
+        ? this.storageService.getPublicUrl(c.logoStorageKey)
+        : null,
+    }));
+
     if (patientIds.length === 0) {
-      return { profiles: [], appointments: [], waitlist: [] };
+      return {
+        user,
+        profiles: [],
+        appointments: [],
+        waitlist: [],
+        featuredClinics,
+        announcements,
+      };
     }
 
-    const [profiles, appointments, waitlist] = await Promise.all([
+    const [profilesRaw, appointmentsRaw, waitlistRaw] = await Promise.all([
       this.prisma.patient.findMany({
         where: { id: { in: patientIds } },
         include: { clinic: { select: { id: true, name: true, slug: true } } },
@@ -210,11 +248,21 @@ export class BookingsService {
               id: true,
               name: true,
               slug: true,
+              address: true,
+              phone: true,
               timezone: true,
+              primaryColorHex: true,
               cancellationWindowHours: true,
             },
           },
-          patient: { select: { id: true, firstName: true, lastName: true } },
+          patient: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              guardianPatientId: true,
+            },
+          },
           dentist: { select: { id: true, displayName: true } },
           chair: { select: { id: true, name: true, roomCode: true } },
           service: {
@@ -234,6 +282,9 @@ export class BookingsService {
         where: { patientId: { in: patientIds } },
         include: {
           clinic: { select: { id: true, name: true, slug: true } },
+          patient: {
+            select: { firstName: true, lastName: true, guardianPatientId: true },
+          },
           service: { select: { id: true, name: true } },
           preferredDentist: { select: { id: true, displayName: true } },
         },
@@ -242,7 +293,59 @@ export class BookingsService {
       }),
     ]);
 
-    return { profiles, appointments, waitlist };
+    const nowMs = now.getTime();
+    const profiles = profilesRaw.map((p) => ({
+      ...p,
+      clinicName: p.clinic.name,
+      clinicSlug: p.clinic.slug,
+      isDependent: Boolean(p.guardianPatientId),
+    }));
+
+    const appointments = appointmentsRaw.map((a) => {
+      const cutoffMs =
+        a.startTimeUtc.getTime() - a.clinic.cancellationWindowHours * 3600_000;
+      return {
+        ...a,
+        referenceCode: `SM-${a.id.slice(0, 8).toUpperCase()}`,
+        clinicName: a.clinic.name,
+        clinicSlug: a.clinic.slug,
+        clinicAddress: a.clinic.address,
+        clinicPhone: a.clinic.phone,
+        clinicTimezone: a.clinic.timezone,
+        clinicPrimaryColorHex: a.clinic.primaryColorHex,
+        cancellationWindowHours: a.clinic.cancellationWindowHours,
+        patientName: `${a.patient.firstName} ${a.patient.lastName}`.trim(),
+        isDependent: Boolean(a.patient.guardianPatientId),
+        dentistName: a.dentist.displayName,
+        chairName: a.chair.name,
+        serviceName: a.service.name,
+        serviceCategory: a.service.category,
+        durationMinutes: a.service.durationMinutes,
+        pricePhp: a.service.pricePhp,
+        canModify:
+          (a.status === "pending_approval" || a.status === "confirmed") &&
+          nowMs <= cutoffMs,
+      };
+    });
+
+    const waitlist = waitlistRaw.map((w) => ({
+      ...w,
+      clinicName: w.clinic.name,
+      clinicSlug: w.clinic.slug,
+      patientName: `${w.patient.firstName} ${w.patient.lastName}`.trim(),
+      isDependent: Boolean(w.patient.guardianPatientId),
+      serviceName: w.service.name,
+      preferredDentistName: w.preferredDentist?.displayName ?? null,
+    }));
+
+    return {
+      user,
+      profiles,
+      appointments,
+      waitlist,
+      featuredClinics,
+      announcements,
+    };
   }
 
   async getMyClinicalSummary(user: User, patientId?: string) {
@@ -292,6 +395,7 @@ export class BookingsService {
         recordedByDentistName: r.recordedByDentist.displayName,
       })),
       files: enrichedFiles,
+      clinicalFiles: enrichedFiles,
       completedVisits,
     };
   }
@@ -423,9 +527,11 @@ export class BookingsService {
   }
 
   async createOnlineBooking(user: User, dto: CreateOnlineBookingDto) {
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { slug: dto.clinicSlug.trim().toLowerCase() },
-    });
+    const clinic = dto.clinicId
+      ? await this.prisma.clinic.findUnique({ where: { id: dto.clinicId } })
+      : await this.prisma.clinic.findUnique({
+          where: { slug: dto.clinicSlug!.trim().toLowerCase() },
+        });
     if (!clinic) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
@@ -599,9 +705,11 @@ export class BookingsService {
   }
 
   async joinWaitlist(user: User, dto: JoinWaitlistDto) {
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { slug: dto.clinicSlug.trim().toLowerCase() },
-    });
+    const clinic = dto.clinicId
+      ? await this.prisma.clinic.findUnique({ where: { id: dto.clinicId } })
+      : await this.prisma.clinic.findUnique({
+          where: { slug: dto.clinicSlug!.trim().toLowerCase() },
+        });
     if (!clinic) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,

@@ -125,8 +125,8 @@ export class SuperAdminController {
 
   @Get("users")
   @ApiOperation({ summary: "List all platform users" })
-  listUsers() {
-    return this.superAdminService.listAllUsers();
+  listUsers(@CurrentUser() actor: User) {
+    return this.superAdminService.listAllUsers(actor);
   }
 
   @Patch("users/:id")

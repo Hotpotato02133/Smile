@@ -53,22 +53,27 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Get front-desk daily schedule, Kanban queue, resources, and waitlist" })
   getFrontDesk(
     @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
     @Query("dateKey") dateKey?: string
   ) {
-    return this.appointmentsService.getFrontDeskWorkspace(tenant, dateKey);
+    return this.appointmentsService.getFrontDeskWorkspace(tenant, actor, dateKey);
   }
 
   @Get("dentist-queue")
   @RequireClinicAccess(["dentist", "clinic_admin"])
-  @ApiOperation({ summary: "Get dentist daily patient queue" })
+  @ApiOperation({ summary: "Get dentist daily or weekly patient queue" })
   getDentistQueue(
     @CurrentTenant() tenant: TenantContext,
     @CurrentUser() actor: User,
     @Query("dateKey") dateKey?: string,
+    @Query("rangeStartKey") rangeStartKey?: string,
+    @Query("rangeEndKey") rangeEndKey?: string,
     @Query("dentistId") dentistId?: string
   ) {
     return this.appointmentsService.getDentistQueue(tenant, actor, {
       dateKey,
+      rangeStartKey,
+      rangeEndKey,
       dentistId,
     });
   }

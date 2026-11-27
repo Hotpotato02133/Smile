@@ -56,7 +56,15 @@ export function serializeClinic(clinic: Clinic & { plan?: SubscriptionPlan }) {
   return {
     ...clinic,
     storageUsedBytes: Number(clinic.storageUsedBytes),
-    ...(clinic.plan ? { plan: serializePlan(clinic.plan) } : {}),
+    ...(clinic.plan
+      ? {
+          plan: serializePlan(clinic.plan),
+          planName: clinic.plan.name,
+          planCode: clinic.plan.code,
+          monthlyPricePhp: clinic.plan.monthlyPricePhp,
+          annualPricePhp: clinic.plan.annualPricePhp,
+        }
+      : {}),
   };
 }
 
@@ -147,10 +155,33 @@ export class SuperAdminService {
       );
     }
 
+    const recentAuditLogsRaw = await this.prisma.platformAuditLog.findMany({
+      where: { clinicId },
+      include: {
+        actorUser: {
+          select: { id: true, email: true, firstName: true, lastName: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+    });
+
+    const recentAuditLogs = recentAuditLogsRaw.map((log) => ({
+      ...log,
+      actorName: `${log.actorUser.firstName} ${log.actorUser.lastName}`.trim() || log.actorUser.email,
+      actorEmail: log.actorUser.email,
+    }));
+
     return {
       ...serializeClinic(clinic),
+      pendingInvitations: clinic.invitations,
+      recentAuditLogs,
       payments: clinic.payments.map((p) => ({
         ...p,
+        clinicName: clinic.name,
+        clinicSlug: clinic.slug,
+        planName: p.plan.name,
+        planCode: p.plan.code,
         plan: serializePlan(p.plan),
       })),
     };
@@ -549,13 +580,25 @@ export class SuperAdminService {
     });
   }
 
-  async listAllUsers() {
+  async listAllUsers(actor: User) {
     const users = await this.prisma.user.findMany({
       include: { clinic: { select: { id: true, name: true, slug: true } } },
       orderBy: { createdAt: "desc" },
       take: 500,
     });
-    return users.filter((u) => !u.clerkId.startsWith("pending:"));
+    const visibleUsers = users
+      .filter((u) => !u.clerkId.startsWith("pending:"))
+      .map((u) => ({
+        ...u,
+        name: `${u.firstName} ${u.lastName}`.trim() || u.email,
+        clinicName: u.clinic?.name ?? null,
+        isRootOwner: this.isRootOwner(u),
+      }));
+
+    return {
+      callerIsRootOwner: this.isRootOwner(actor),
+      users: visibleUsers,
+    };
   }
 
   async updateUserRoleOrStatus(

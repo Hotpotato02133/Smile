@@ -38,7 +38,9 @@ export class SchedulingController {
     @Query("serviceId") serviceId: string,
     @Query("dateKey") dateKey: string,
     @Query("preferredDentistId") preferredDentistId?: string,
-    @Query("sessionId") sessionId?: string
+    @Query("sessionId") sessionId?: string,
+    @Query("ignoreAppointmentId") ignoreAppointmentId?: string,
+    @Query("includeEmergencyBuffer") includeEmergencyBuffer?: string
   ) {
     return this.schedulingService.getPublicAvailableSlots({
       slug,
@@ -46,6 +48,8 @@ export class SchedulingController {
       dateKey,
       preferredDentistId,
       sessionId,
+      ignoreAppointmentId,
+      includeEmergencyBuffer: includeEmergencyBuffer === "true",
     });
   }
 
