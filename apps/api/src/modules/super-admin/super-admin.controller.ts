@@ -210,4 +210,34 @@ export class SuperAdminController {
       offset: offset ? Number(offset) : undefined,
     });
   }
+
+  @Get("audit-logs/actors")
+  @ApiOperation({ summary: "List distinct users who have recorded audit logs" })
+  listAuditActors() {
+    return this.superAdminService.listAuditActors();
+  }
+
+  @Post("clinics/:id/renewal-reminder")
+  @ApiOperation({ summary: "Send manual subscription renewal reminder to clinic" })
+  sendRenewalReminder(@CurrentUser() actor: User, @Param("id") id: string) {
+    return this.superAdminService.sendRenewalReminder(actor, id);
+  }
+
+  @Post("invitations/:id/resend")
+  @ApiOperation({ summary: "Refresh expiry and resend a pending invitation" })
+  resendInvitation(@CurrentUser() actor: User, @Param("id") id: string) {
+    return this.superAdminService.resendInvitation(actor, id);
+  }
+
+  @Post("plans/ensure-defaults")
+  @ApiOperation({ summary: "Idempotently ensure baseline Trial, Starter, and Pro plans exist" })
+  ensureDefaultPlans() {
+    return this.superAdminService.ensureDefaultPlans();
+  }
+
+  @Post("analytics/trigger-rollup")
+  @ApiOperation({ summary: "Manually trigger yesterday's daily analytics rollup" })
+  triggerDailyRollup(@Query("dateKey") dateKey?: string) {
+    return this.superAdminService.triggerDailyRollup(dateKey);
+  }
 }

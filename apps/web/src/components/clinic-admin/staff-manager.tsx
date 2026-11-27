@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   Copy,
@@ -49,8 +49,8 @@ import {
   getErrorCode,
   getErrorMessage,
 } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 const inviteSchema = z.object({
   email: z.string().email("Enter a valid email address"),

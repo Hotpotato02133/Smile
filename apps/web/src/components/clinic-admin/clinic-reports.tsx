@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery } from "@/lib/api";
 import { useState } from "react";
 import {
   Area,
@@ -39,7 +39,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatPhp, formatShortDateKey } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 const outcomesChartConfig = {
   completedCount: {

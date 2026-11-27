@@ -1,7 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   Armchair,
@@ -46,8 +46,8 @@ import {
 } from "@/components/ui/sheet";
 import { formatDate, getErrorMessage } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 const NAV_ITEMS = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard, exact: true },
@@ -125,12 +125,12 @@ export function ClinicAdminEnvGate({ children }: { children: ReactNode }) {
     return (
       <Alert className="max-w-2xl">
         <ShieldCheck className="size-4" />
-        <AlertTitle>Connect Clerk & Convex to activate Clinic Admin</AlertTitle>
+        <AlertTitle>Connect Clerk & Smile API to activate Clinic Admin</AlertTitle>
         <AlertDescription>
-          Populate <code>NEXT_PUBLIC_CONVEX_URL</code>,{" "}
+          Populate <code>NEXT_PUBLIC_API_URL</code>,{" "}
           <code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>, and{" "}
           <code>CLERK_SECRET_KEY</code> in <code>.env.local</code>, then run{" "}
-          <code>npx convex dev</code> to manage your clinic&apos;s dentists,
+          <code>npm run dev:api</code> to manage your clinic&apos;s dentists,
           operatory chairs, dental services, and operating hours.
         </AlertDescription>
       </Alert>
@@ -407,7 +407,7 @@ function ClinicAdminAuthGuard({
   children: ReactNode;
   overrideClinicId: Id<"clinics"> | undefined;
 }) {
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading: authLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
   const [syncError, setSyncError] = useState<string | null>(null);

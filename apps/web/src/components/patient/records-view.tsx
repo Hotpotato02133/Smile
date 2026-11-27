@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery } from "@/lib/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
@@ -20,8 +20,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatBytes, formatDate } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 import {
   TOOTH_CONDITION_META,
   type PatientDashboardData,
@@ -341,7 +341,7 @@ function ProfileClinicalRecords({
                 >
                   {file.url ? (
                     <div className="relative h-28 w-full overflow-hidden bg-slate-900">
-                      {/* Signed Convex storage URLs are dynamic, so native img is ideal */}
+                      {/* Signed Cloudflare R2 URLs are dynamic, so native img is ideal */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={file.url}

@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import { Megaphone, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
@@ -33,8 +33,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { formatDate, formatDateTime, getErrorMessage } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Doc, Id } from "@/lib/api";
 
 const announcementSchema = z.object({
   title: z.string().min(3, "Title is required"),

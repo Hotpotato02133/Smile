@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   Armchair,
@@ -40,7 +40,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatBytes, formatDate, formatPhp } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 function QuotaMeter({
   label,

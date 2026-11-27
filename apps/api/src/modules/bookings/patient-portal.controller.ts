@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
@@ -42,6 +43,23 @@ export class PatientPortalController {
   @ApiOperation({ summary: "Get signed-in patient's profiles, appointments, and waitlist" })
   getDashboard(@CurrentUser() user: User) {
     return this.bookingsService.getPatientDashboard(user);
+  }
+
+  @Get("clinical-summary")
+  @ApiOperation({
+    summary: "Get patient's own odontogram tooth records and presigned clinical files",
+  })
+  getClinicalSummary(
+    @CurrentUser() user: User,
+    @Query("patientId") patientId?: string
+  ) {
+    return this.bookingsService.getMyClinicalSummary(user, patientId);
+  }
+
+  @Get("waitlist/:id/claim")
+  @ApiOperation({ summary: "Fetch waitlist entry details for claiming an open slot" })
+  getWaitlistForClaim(@CurrentUser() user: User, @Param("id") id: string) {
+    return this.bookingsService.getWaitlistEntryForClaim(user, id);
   }
 
   @Get("clinics/:clinicId/profiles")

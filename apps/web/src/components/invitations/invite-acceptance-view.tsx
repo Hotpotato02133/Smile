@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth, useClerk, useSession, useUser } from "@clerk/nextjs";
-import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAction, useApiAuth, useMutation, useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   ArrowRight,
@@ -23,7 +23,7 @@ import { useEnvConfig } from "@/components/providers/app-providers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDate, getErrorMessage } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 type InviteRole = "super_admin" | "clinic_admin" | "dentist" | "receptionist";
 
@@ -80,7 +80,7 @@ const ROLE_META: Record<
 
 function ConnectedInviteView({ token }: { token: string }) {
   const router = useRouter();
-  const { isAuthenticated, isLoading: convexAuthLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading: apiAuthLoading } = useApiAuth();
   const { getToken } = useAuth();
   const { user, isLoaded: clerkLoaded } = useUser();
   const { session } = useSession();
@@ -124,7 +124,7 @@ function ConnectedInviteView({ token }: { token: string }) {
     .trim()
     .toLowerCase();
 
-  const authReady = clerkLoaded && !convexAuthLoading;
+  const authReady = clerkLoaded && !apiAuthLoading;
   const isSignedIn = authReady && isAuthenticated && Boolean(user);
   const emailMatches =
     Boolean(invitation) &&
@@ -577,7 +577,7 @@ export function InviteAcceptanceView({ token }: { token: string }) {
   if (!isConfigured) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F6F8FB] p-6 text-sm text-slate-600">
-        Configure Clerk and Convex environment keys to open role invitations.
+        Configure Clerk and Smile API environment keys to open role invitations.
       </div>
     );
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { SignInButton } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import {
   ArrowLeft,
   BellRing,
@@ -53,8 +53,8 @@ import {
   getErrorMessage,
   getTodayDateKeyInTimeZone,
 } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 type HeldSlot = {
   lockId: Id<"slotLocks">;
@@ -165,7 +165,7 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
   const urlDateParam = searchParams.get("date");
   const urlPatientId = searchParams.get("patientId");
 
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const currentUser = useQuery(
     api.users.current,
@@ -490,7 +490,7 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
         <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-start gap-3.5">
             {clinic.logoUrl ? (
-              // Dynamic signed Convex storage URL
+              // Dynamic signed Cloudflare R2 URL
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={clinic.logoUrl}
@@ -1315,10 +1315,10 @@ export function ClinicBookingWizard({ clinicSlug }: { clinicSlug: string }) {
         <main className="mx-auto flex w-full max-w-2xl flex-1 items-center p-6">
           <Alert>
             <ShieldCheck className="size-4" />
-            <AlertTitle>Connect Convex &amp; Clerk to enable online booking</AlertTitle>
+            <AlertTitle>Connect Smile API &amp; Clerk to enable online booking</AlertTitle>
             <AlertDescription>
               Configure <code>.env.local</code> and run{" "}
-              <code>npx convex dev</code> to load the public booking portal for{" "}
+              <code>npm run dev:api</code> to load the public booking portal for{" "}
               <code>/c/{clinicSlug}</code>.
             </AlertDescription>
           </Alert>

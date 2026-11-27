@@ -2,7 +2,7 @@
 
 import { SignInButton } from "@clerk/nextjs";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import { ArrowLeft, LogIn, ShieldAlert, UserPlus, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
@@ -26,8 +26,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { api } from "../../../convex/_generated/api";
-import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Doc, Id } from "@/lib/api";
 
 const COMMON_ALLERGIES = [
   "Lidocaine",
@@ -470,7 +470,7 @@ export function PatientIntakeStep({
   onBack: () => void;
   onSubmit: (payload: PatientIntakeSubmitPayload) => Promise<void>;
 }) {
-  const { isAuthenticated, isLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const currentUser = useQuery(
     api.users.current,
@@ -548,7 +548,7 @@ export function PatientIntakeStep({
         <ShieldAlert className="size-4" />
         <AlertTitle>Finishing account sync…</AlertTitle>
         <AlertDescription>
-          Your account is syncing with Convex. Wait a moment or refresh to
+          Your account is syncing with the backend. Wait a moment or refresh to
           complete your booking.
         </AlertDescription>
       </Alert>

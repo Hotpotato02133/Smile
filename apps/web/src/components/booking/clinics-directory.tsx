@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery } from "@/lib/api";
 import {
   ArrowRight,
   MapPin,
@@ -25,7 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 function ConnectedDirectory() {
   const [search, setSearch] = useState("");
@@ -84,7 +84,7 @@ function ConnectedDirectory() {
               <CardHeader>
                 <div className="flex items-center gap-2.5">
                   {clinic.logoUrl ? (
-                    // Dynamic signed Convex storage URL
+                    // Dynamic signed Cloudflare R2 URL
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={clinic.logoUrl}
@@ -167,10 +167,10 @@ export function ClinicsDirectory() {
         <main className="mx-auto flex w-full max-w-2xl flex-1 items-center p-6">
           <Alert>
             <ShieldCheck className="size-4" />
-            <AlertTitle>Connect Convex & Clerk to browse live clinics</AlertTitle>
+            <AlertTitle>Connect Smile API & Clerk to browse live clinics</AlertTitle>
             <AlertDescription>
               Configure <code>.env.local</code> and run{" "}
-              <code>npx convex dev</code> to display provisioned dental clinics.
+              <code>npm run dev:api</code> to display provisioned dental clinics.
             </AlertDescription>
           </Alert>
         </main>

@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { formatMinutes12h } from "@/lib/format";
-import type { Id } from "../../../convex/_generated/dataModel";
+import type { Id } from "@/lib/api";
 
 const locales = { "en-US": enUS };
 

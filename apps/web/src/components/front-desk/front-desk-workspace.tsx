@@ -1,7 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import { endOfWeek, format, startOfWeek } from "date-fns";
 import {
   AlertTriangle,
@@ -73,8 +73,8 @@ import {
   getErrorMessage,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 type KanbanStatus =
   | "confirmed"
@@ -212,7 +212,7 @@ function ConnectedFrontDesk({
 }: {
   overrideClinicId?: Id<"clinics">;
 }) {
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading: authLoading } = useApiAuth();
   const [todayRefMs] = useState<number>(() => Date.now());
   const [selectedDate, setSelectedDate] = useState<Date>(() => {
     const d = new Date();
@@ -1569,10 +1569,10 @@ function FrontDeskSearchResolver() {
       <main className="mx-auto flex w-full max-w-2xl flex-1 items-center p-6">
         <Alert>
           <ShieldCheck className="size-4" />
-          <AlertTitle>Connect Clerk &amp; Convex to activate Front Desk</AlertTitle>
+          <AlertTitle>Connect Clerk &amp; Smile API to activate Front Desk</AlertTitle>
           <AlertDescription>
             Configure <code>.env.local</code> and run{" "}
-            <code>npx convex dev</code> to use the real-time check-in Kanban and
+            <code>npm run dev:api</code> to use the real-time check-in Kanban and
             multi-chair master calendar.
           </AlertDescription>
         </Alert>

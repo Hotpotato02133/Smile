@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
@@ -38,8 +38,8 @@ import {
   getErrorMessage,
   getTodayDateKeyInTimeZone,
 } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 import {
   APPT_STATUS_META,
   type PatientAppointmentItem,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery } from "@/lib/api";
 import {
   Armchair,
   ArrowRight,
@@ -26,7 +26,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatBytes, formatDate } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 function QuotaCard({
   title,

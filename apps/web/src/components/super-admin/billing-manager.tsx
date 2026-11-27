@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   CalendarPlus,
   CheckCircle2,
@@ -54,8 +54,8 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDate, formatPhp, getErrorMessage } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 const MAX_IMAGE_RECEIPT_BYTES = 500 * 1024; // 500 KB zero-cost storage rule (AGENTS.md §3)
 const MAX_PDF_RECEIPT_BYTES = 1024 * 1024; // 1 MB max for PDF receipts
@@ -287,21 +287,27 @@ export function BillingManager() {
         return;
       }
 
-      const uploadUrl = await generateReceiptUploadUrl({});
+      const contentType = payload.type || file.type || "image/webp";
+      const selectedClinicId = form.getValues("clinicId") || clinics?.[0]?._id || "";
+      const { uploadUrl, storageKey } = await generateReceiptUploadUrl({
+        clinicId: selectedClinicId,
+        fileName: file.name || "receipt.webp",
+        contentType,
+        fileSizeBytes: payload.size,
+      });
       const res = await fetch(uploadUrl, {
-        method: "POST",
+        method: "PUT",
         headers: {
-          "Content-Type": payload.type || file.type || "application/octet-stream",
+          "Content-Type": contentType,
         },
         body: payload,
       });
       if (!res.ok) throw new Error("Upload failed.");
-      const json = (await res.json()) as { storageId: Id<"_storage"> };
-      setReceiptStorageId(json.storageId);
+      setReceiptStorageId(storageKey);
       setReceiptFileName(
         `${file.name} (${Math.round(payload.size / 1024)} KB)`
       );
-      toast.success("Compressed receipt uploaded to Convex File Storage.");
+      toast.success("Compressed receipt uploaded to Cloudflare R2.");
     } catch (err) {
       toast.error(getErrorMessage(err, "Receipt upload failed."));
     } finally {

@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   ExternalLink,
@@ -45,8 +45,8 @@ import {
   slugify,
   timeInputToMinutes,
 } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Doc, Id } from "@/lib/api";
 
 const MAX_LOGO_BYTES = 500 * 1024;
 
@@ -220,17 +220,19 @@ function ClinicSettingsEditor({
     setUploadingLogo(true);
     try {
       const compressed = await compressLogoImage(file);
-      const uploadUrl = await generateLogoUploadUrl({
+      const contentType = compressed.type || "image/webp";
+      const { uploadUrl, storageKey } = await generateLogoUploadUrl({
+        fileName: file.name || "clinic-logo.webp",
+        contentType,
         fileSizeBytes: compressed.size,
       });
       const res = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": compressed.type || "image/webp" },
+        method: "PUT",
+        headers: { "Content-Type": contentType },
         body: compressed,
       });
       if (!res.ok) throw new Error("Upload failed.");
-      const json = (await res.json()) as { storageId: Id<"_storage"> };
-      setLogoStorageId(json.storageId);
+      setLogoStorageId(storageKey);
       setLogoSizeBytes(compressed.size);
       setRemoveLogo(false);
       setLogoPreviewUrl(URL.createObjectURL(compressed));

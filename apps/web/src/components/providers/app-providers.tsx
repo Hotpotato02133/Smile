@@ -1,29 +1,29 @@
 "use client";
 
-import { ClerkProvider, useAuth } from "@clerk/nextjs";
+import { ClerkProvider } from "@clerk/nextjs";
 import { shadcn } from "@clerk/ui/themes";
-import { ConvexReactClient } from "convex/react";
-import { ConvexProviderWithClerk } from "convex/react-clerk";
-import { createContext, type ReactNode, useContext } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createContext, type ReactNode, useContext, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
+import { API_BASE_URL, SocketProvider } from "@/lib/api";
 
-const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() ?? "";
-const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL?.trim() ?? "";
+const clerkPublishableKey =
+  process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() ?? "";
+const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim() || API_BASE_URL;
 
 const hasClerk = Boolean(clerkPublishableKey);
-const hasConvex = Boolean(convexUrl);
-const convex = hasConvex ? new ConvexReactClient(convexUrl) : null;
+const hasApi = Boolean(apiUrl);
 
 type EnvConfig = {
   hasClerk: boolean;
-  hasConvex: boolean;
+  hasApi: boolean;
   isConfigured: boolean;
 };
 
 const EnvConfigContext = createContext<EnvConfig>({
   hasClerk,
-  hasConvex,
-  isConfigured: hasClerk && hasConvex,
+  hasApi,
+  isConfigured: hasClerk && hasApi,
 });
 
 export function useEnvConfig(): EnvConfig {
@@ -32,8 +32,12 @@ export function useEnvConfig(): EnvConfig {
 
 function SetupNoticeBanner() {
   const missing: string[] = [];
-  if (!hasClerk) missing.push("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY");
-  if (!hasConvex) missing.push("NEXT_PUBLIC_CONVEX_URL");
+  if (!hasClerk) {
+    missing.push("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY");
+  }
+  if (!hasApi) {
+    missing.push("NEXT_PUBLIC_API_URL");
+  }
 
   if (missing.length === 0) return null;
 
@@ -43,17 +47,29 @@ function SetupNoticeBanner() {
       <code className="rounded bg-amber-500/15 px-1 py-0.5 font-mono">
         {missing.join(", ")}
       </code>{" "}
-      in <code className="rounded bg-amber-500/15 px-1 py-0.5 font-mono">.env.local</code>{" "}
-      and run <code className="rounded bg-amber-500/15 px-1 py-0.5 font-mono">npx convex dev</code>{" "}
-      to enable authentication and live database sync.
+      in <code className="rounded bg-amber-500/15 px-1 py-0.5 font-mono">apps/web/.env.local</code>{" "}
+      and run <code className="rounded bg-amber-500/15 px-1 py-0.5 font-mono">npm run dev:api</code>{" "}
+      to enable authentication and live backend sync.
     </div>
   );
 }
 
 export function AppProviders({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: 1,
+            refetchOnWindowFocus: false,
+          },
+        },
+      })
+  );
+
   const content = (
     <EnvConfigContext.Provider
-      value={{ hasClerk, hasConvex, isConfigured: hasClerk && hasConvex }}
+      value={{ hasClerk, hasApi, isConfigured: hasClerk && hasApi }}
     >
       <SetupNoticeBanner />
       {children}
@@ -62,22 +78,19 @@ export function AppProviders({ children }: { children: ReactNode }) {
   );
 
   if (!hasClerk) {
-    return content;
-  }
-
-  if (!convex) {
     return (
-      <ClerkProvider publishableKey={clerkPublishableKey} appearance={{ theme: shadcn }}>
-        {content}
-      </ClerkProvider>
+      <QueryClientProvider client={queryClient}>{content}</QueryClientProvider>
     );
   }
 
   return (
-    <ClerkProvider publishableKey={clerkPublishableKey} appearance={{ theme: shadcn }}>
-      <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-        {content}
-      </ConvexProviderWithClerk>
+    <ClerkProvider
+      publishableKey={clerkPublishableKey}
+      appearance={{ theme: shadcn }}
+    >
+      <QueryClientProvider client={queryClient}>
+        <SocketProvider>{content}</SocketProvider>
+      </QueryClientProvider>
     </ClerkProvider>
   );
 }

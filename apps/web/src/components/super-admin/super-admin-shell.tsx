@@ -1,7 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import {
   Activity,
   Building2,
@@ -33,7 +33,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 const SIDEBAR_STORAGE_KEY = "smile.superAdmin.sidebarOpen";
 const SIDEBAR_EVENT = "smile-super-admin-sidebar-change";
@@ -191,7 +191,7 @@ function ConnectedSidebarFooter({
 }: {
   onQueueCounts?: (counts: { billing: number; invites: number }) => void;
 }) {
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated } = useApiAuth();
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
   const isSuperAdmin = Boolean(user?.isActive && user.role === "super_admin");
   const overview = useQuery(
@@ -227,7 +227,7 @@ function ConnectedSidebarFooter({
         <div className="mt-2.5 space-y-2">
           <div>
             <div className="flex items-center justify-between text-[11px] text-slate-500">
-              <span>Convex Storage</span>
+              <span>Cloudflare R2</span>
               <span className="tabular-nums font-medium text-slate-700">
                 {storagePct}%
               </span>
@@ -318,7 +318,7 @@ function ConnectedSidebarFooter({
 }
 
 function ConnectedTopIdentity() {
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated } = useApiAuth();
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
 
   return (
@@ -337,7 +337,7 @@ function ConnectedTopIdentity() {
 }
 
 function SuperAdminAuthGuard({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading: authLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
 
@@ -450,10 +450,10 @@ export function SuperAdminEnvGate({ children }: { children: ReactNode }) {
       <Alert className="max-w-2xl rounded-2xl border-slate-200 bg-white p-6">
         <ShieldCheck className="size-5 text-[#6C5CE7]" />
         <AlertTitle className="text-base font-semibold">
-          Connect Clerk &amp; Convex to activate Super Admin
+          Connect Clerk &amp; Smile API to activate Super Admin
         </AlertTitle>
         <AlertDescription className="mt-1.5 text-sm text-slate-600">
-          Configure <code>NEXT_PUBLIC_CONVEX_URL</code>,{" "}
+          Configure <code>NEXT_PUBLIC_API_URL</code>,{" "}
           <code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>,{" "}
           <code>CLERK_SECRET_KEY</code>, and <code>SUPER_ADMIN_EMAIL</code> in{" "}
           <code>.env.local</code>, then run <code>npm run dev</code>.
@@ -470,7 +470,7 @@ function ConnectedSuperAdminDeactivatedGate({
 }: {
   children: ReactNode;
 }) {
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated } = useApiAuth();
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
 
   if (user && !user.isActive) {
@@ -673,7 +673,7 @@ function SuperAdminShellLayout({
                         Zero-Cost Guardrails
                       </p>
                       <p className="mt-0.5 text-[11px] text-slate-500">
-                        Convex 1 GB storage · Resend 3,000/mo
+                        Cloudflare R2 10 GB storage · Resend 3,000/mo
                       </p>
                     </div>
                   </div>

@@ -745,4 +745,123 @@ export class AppointmentsService {
   getDateKeyForClinic(utcMs: number, timeZone: string): string {
     return getLocalDateKeyAndMinute(utcMs, timeZone).dateKey;
   }
+
+  async getDentistTimeOff(
+    tenant: TenantContext,
+    actor: User,
+    dentistId?: string
+  ) {
+    const resolvedDentist = dentistId
+      ? await this.prisma.dentist.findFirst({
+          where: { id: dentistId, clinicId: tenant.clinicId },
+        })
+      : await this.prisma.dentist.findFirst({
+          where: { userId: actor.id, clinicId: tenant.clinicId },
+        });
+    if (!resolvedDentist) return [];
+    return this.prisma.dentistTimeOff.findMany({
+      where: {
+        clinicId: tenant.clinicId,
+        dentistId: resolvedDentist.id,
+        endTimeUtc: { gte: new Date() },
+      },
+      orderBy: { startTimeUtc: "asc" },
+      take: 50,
+    });
+  }
+
+  async checkTimeOffConflicts(
+    tenant: TenantContext,
+    actor: User,
+    params: { dentistId?: string; startTimeUtc: number; endTimeUtc: number }
+  ) {
+    const resolvedDentist = params.dentistId
+      ? await this.prisma.dentist.findFirst({
+          where: { id: params.dentistId, clinicId: tenant.clinicId },
+        })
+      : await this.prisma.dentist.findFirst({
+          where: { userId: actor.id, clinicId: tenant.clinicId },
+        });
+    if (
+      !resolvedDentist ||
+      !Number.isFinite(params.startTimeUtc) ||
+      !Number.isFinite(params.endTimeUtc)
+    ) {
+      return [];
+    }
+    return this.prisma.appointment.findMany({
+      where: {
+        clinicId: tenant.clinicId,
+        dentistId: resolvedDentist.id,
+        status: { notIn: ["cancelled", "no_show"] },
+        startTimeUtc: { lt: new Date(params.endTimeUtc) },
+        endTimeUtc: { gt: new Date(params.startTimeUtc) },
+      },
+      include: {
+        patient: { select: { firstName: true, lastName: true } },
+        service: { select: { name: true } },
+      },
+      orderBy: { startTimeUtc: "asc" },
+    });
+  }
+
+  async createMyTimeOff(
+    tenant: TenantContext,
+    actor: User,
+    body: {
+      dentistId?: string;
+      startTimeUtc: number | string;
+      endTimeUtc: number | string;
+      reason: string;
+    }
+  ) {
+    const resolvedDentist = body.dentistId
+      ? await this.prisma.dentist.findFirst({
+          where: { id: body.dentistId, clinicId: tenant.clinicId },
+        })
+      : await this.prisma.dentist.findFirst({
+          where: { userId: actor.id, clinicId: tenant.clinicId },
+        });
+    if (!resolvedDentist) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Dentist profile not found in this clinic.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    const start = new Date(body.startTimeUtc);
+    const end = new Date(body.endTimeUtc);
+    if (end.getTime() <= start.getTime()) {
+      throw new DomainException(
+        API_ERROR_CODES.INVALID_INPUT,
+        "endTimeUtc must be after startTimeUtc.",
+        HttpStatus.BAD_REQUEST
+      );
+    }
+    return this.prisma.dentistTimeOff.create({
+      data: {
+        clinicId: tenant.clinicId,
+        dentistId: resolvedDentist.id,
+        startTimeUtc: start,
+        endTimeUtc: end,
+        reason: body.reason?.trim() || "Time off",
+        createdByUserId: actor.id,
+      },
+    });
+  }
+
+  async removeMyTimeOff(tenant: TenantContext, timeOffId: string) {
+    const existing = await this.prisma.dentistTimeOff.findFirst({
+      where: { id: timeOffId, clinicId: tenant.clinicId },
+    });
+    if (!existing) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Time-off block not found.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    await this.prisma.dentistTimeOff.delete({ where: { id: existing.id } });
+    return { deleted: true };
+  }
 }

@@ -45,7 +45,7 @@ const clerkHandler = clerkMiddleware(async (auth, req) => {
   const { sessionClaims } = await auth();
   const role = roleFromClaims(sessionClaims as Record<string, unknown> | null);
 
-  // Role not in the token yet (webhook still syncing): /post-login resolves it from Convex.
+  // Role not in the token yet (webhook still syncing): /post-login resolves it from the API.
   if (!role) return;
 
   const rule = ROLE_ROUTES.find((r) => r.matcher(req));

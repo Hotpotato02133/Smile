@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   CalendarOff,
@@ -28,8 +28,8 @@ import {
   getErrorMessage,
   localDateTimeToUtc,
 } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 function addDaysToDateKey(dateKey: string, delta: number): string {
   const [y, m, d] = dateKey.split("-").map(Number);

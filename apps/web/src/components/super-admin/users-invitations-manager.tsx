@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   ArrowRight,
   Building2,
@@ -65,8 +65,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDate, formatDateTime, getErrorMessage } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 type AssignableRole = "super_admin" | "clinic_admin" | "dentist" | "receptionist";
 type AllRole = AssignableRole | "patient";
@@ -667,7 +667,7 @@ export function UsersInvitationsManager() {
                                           <code className="font-mono font-semibold">
                                             GMAIL_APP_PASSWORD
                                           </code>{" "}
-                                          in Convex for free delivery to any recipient (no domain needed), or verify a Resend domain and set{" "}
+                                          in the API for free delivery to any recipient (no domain needed), or verify a Resend domain and set{" "}
                                           <code className="font-mono font-semibold">
                                             RESEND_FROM_EMAIL
                                           </code>

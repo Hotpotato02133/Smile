@@ -1,6 +1,6 @@
 "use client";
 
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import { AlertTriangle, LifeBuoy, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10,7 +10,7 @@ import { SmileLogo } from "@/components/landing/smile-logo";
 import { useEnvConfig } from "@/components/providers/app-providers";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 const ROLE_HOME = {
   super_admin: "/super-admin",
@@ -27,7 +27,7 @@ function isDeactivatedMessage(message: string): boolean {
 
 function PostLoginRedirector() {
   const router = useRouter();
-  const { isAuthenticated, isLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
   const syncStartedRef = useRef(false);
@@ -124,7 +124,7 @@ export default function PostLoginPage() {
   if (!isConfigured) {
     return (
       <main className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
-        Configure Clerk and Convex keys in <code>.env.local</code> to complete
+        Configure Clerk and Smile API keys in <code>.env.local</code> to complete
         sign-in routing.
       </main>
     );

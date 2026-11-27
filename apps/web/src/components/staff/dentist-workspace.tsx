@@ -1,7 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import {
   AlertOctagon,
   AlertTriangle,
@@ -78,8 +78,8 @@ import {
   getTodayDateKeyInTimeZone,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 type QueueViewMode = "day" | "week";
 type QueueStatusFilter = "all" | "waiting" | "in_chair" | "completed";
@@ -400,7 +400,7 @@ function ConnectedDentistWorkspace({
 }: {
   overrideClinicId?: Id<"clinics">;
 }) {
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading: authLoading } = useApiAuth();
   const [viewMode, setViewMode] = useState<QueueViewMode>("day");
   const [dateKey, setDateKey] = useState<string>(() =>
     getTodayDateKeyInTimeZone("Asia/Manila")
@@ -2035,11 +2035,11 @@ function StaffSearchResolver() {
         <Alert>
           <ShieldCheck className="size-4" />
           <AlertTitle>
-            Connect Clerk &amp; Convex to activate Dentist Workspace
+            Connect Clerk &amp; Smile API to activate Dentist Workspace
           </AlertTitle>
           <AlertDescription>
             Configure <code>.env.local</code> and run{" "}
-            <code>npx convex dev</code> to open the dentist chair queue,
+            <code>npm run dev:api</code> to open the dentist chair queue,
             32-tooth SVG odontogram, compressed X-ray vault, and time-off
             blocker.
           </AlertDescription>

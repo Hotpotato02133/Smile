@@ -1,6 +1,6 @@
 "use client";
 
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "@/lib/api";
 import { ChevronDown, ChevronRight, Download, Search } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -22,8 +22,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 const ACTION_TYPES = [
   "CLINIC_CREATED",

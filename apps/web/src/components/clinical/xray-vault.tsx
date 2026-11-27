@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "convex/react";
+import { useMutation } from "@/lib/api";
 import {
   ExternalLink,
   FileImage,
@@ -25,8 +25,8 @@ import {
 import { formatBytes, formatDateTime, getErrorMessage } from "@/lib/format";
 import { compressClinicalFile } from "@/lib/image-compression";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 type ClinicalFileType =
   | "xray_periapical"
@@ -98,21 +98,23 @@ export function XrayVault({
     setUploading(true);
     try {
       const compressed = await compressClinicalFile(file);
-      const uploadUrl = await generateUploadUrl({
+      const { uploadUrl, storageKey } = await generateUploadUrl({
+        patientId,
+        fileName: compressed.fileName,
+        contentType: compressed.mimeType,
         fileSizeBytes: compressed.compressedBytes,
       });
       const res = await fetch(uploadUrl, {
-        method: "POST",
+        method: "PUT",
         headers: { "Content-Type": compressed.mimeType },
         body: compressed.blob,
       });
       if (!res.ok) throw new Error("Storage upload failed.");
-      const json = (await res.json()) as { storageId: Id<"_storage"> };
 
       await saveClinicalFile({
         patientId,
         appointmentId,
-        storageId: json.storageId,
+        storageKey,
         fileName: compressed.fileName,
         fileType,
         sizeBytes: compressed.compressedBytes,

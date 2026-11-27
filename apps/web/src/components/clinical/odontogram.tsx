@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "convex/react";
+import { useMutation } from "@/lib/api";
 import { Lock } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -17,8 +17,8 @@ import {
 } from "@/components/ui/select";
 import { formatDateTime, getErrorMessage } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 export type ToothSurface =
   | "Mesial"

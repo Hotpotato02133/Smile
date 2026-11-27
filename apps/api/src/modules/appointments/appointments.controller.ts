@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -164,5 +165,75 @@ export class AppointmentsController {
     dto: UpdateWaitlistStatusDto
   ) {
     return this.appointmentsService.updateWaitlistStatus(tenant, id, dto);
+  }
+
+  @Post("waitlist/:id/offer")
+  @RequireClinicAccess(["receptionist", "clinic_admin"])
+  @RequireClinicWrite("staff")
+  @ApiOperation({ summary: "Mark waitlist entry notified and trigger slot opening offer" })
+  sendManualWaitlistOffer(
+    @CurrentTenant() tenant: TenantContext,
+    @Param("id") id: string
+  ) {
+    return this.appointmentsService.updateWaitlistStatus(tenant, id, {
+      status: "notified",
+    });
+  }
+
+  @Get("dentist-time-off")
+  @RequireClinicAccess(["dentist", "clinic_admin", "receptionist"])
+  @ApiOperation({ summary: "List upcoming time-off blocks for a dentist" })
+  getDentistTimeOff(
+    @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
+    @Query("dentistId") dentistId?: string
+  ) {
+    return this.appointmentsService.getDentistTimeOff(tenant, actor, dentistId);
+  }
+
+  @Get("time-off-conflicts")
+  @RequireClinicAccess(["dentist", "clinic_admin"])
+  @ApiOperation({ summary: "Check existing appointments overlapping a proposed time-off block" })
+  checkTimeOffConflicts(
+    @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
+    @Query("dentistId") dentistId?: string,
+    @Query("startTimeUtc") startTimeUtc?: string,
+    @Query("endTimeUtc") endTimeUtc?: string
+  ) {
+    return this.appointmentsService.checkTimeOffConflicts(tenant, actor, {
+      dentistId,
+      startTimeUtc: Number(startTimeUtc),
+      endTimeUtc: Number(endTimeUtc),
+    });
+  }
+
+  @Post("my-time-off")
+  @RequireClinicAccess(["dentist", "clinic_admin"])
+  @RequireClinicWrite("staff")
+  @ApiOperation({ summary: "Create a time-off block for the signed-in dentist" })
+  createMyTimeOff(
+    @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
+    @Body()
+    body: {
+      dentistId?: string;
+      startTimeUtc: number | string;
+      endTimeUtc: number | string;
+      reason: string;
+    }
+  ) {
+    return this.appointmentsService.createMyTimeOff(tenant, actor, body);
+  }
+
+  @Delete("my-time-off/:id")
+  @RequireClinicAccess(["dentist", "clinic_admin"])
+  @RequireClinicWrite("staff")
+  @ApiOperation({ summary: "Remove a dentist time-off block" })
+  removeMyTimeOff(
+    @CurrentTenant() tenant: TenantContext,
+    @Param("id") id: string
+  ) {
+    return this.appointmentsService.removeMyTimeOff(tenant, id);
   }
 }

@@ -1,18 +1,177 @@
-import type { FunctionReturnType } from "convex/server";
-import type { api } from "../../../convex/_generated/api";
+import type {
+  AppointmentStatus,
+  DentalAnxietyLevel,
+  MedicalHistory,
+  PatientSex,
+  ToothCondition,
+  ToothSurface,
+  TreatmentStatus,
+  WaitlistStatus,
+} from "@smile/shared";
+import type { Id } from "@/lib/api";
 
-export type PatientDashboardData = FunctionReturnType<
-  typeof api.patientPortal.getDashboardData
->;
-export type PatientProfileItem = PatientDashboardData["profiles"][number];
-export type PatientAppointmentItem = PatientDashboardData["appointments"][number];
-export type PatientWaitlistItem = PatientDashboardData["waitlist"][number];
-export type FeaturedClinicItem = PatientDashboardData["featuredClinics"][number];
-export type PatientAnnouncementItem = PatientDashboardData["announcements"][number];
+export interface PatientProfileItem {
+  _id: Id<"patients">;
+  id?: string;
+  clinicId: Id<"clinics">;
+  clinicName: string;
+  clinicSlug: string;
+  isDependent: boolean;
+  userId?: Id<"users"> | null;
+  guardianPatientId?: Id<"patients"> | null;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  sex: PatientSex;
+  email?: string;
+  phone: string;
+  address?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  medicalHistory: MedicalHistory & { dentalAnxietyLevel: DentalAnxietyLevel };
+  lastCleaningDate?: string | null;
+  nextRecallDate?: string | null;
+  noShowCount: number;
+  createdAt: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
 
-export type PatientClinicalSummary = FunctionReturnType<
-  typeof api.patientPortal.getMyClinicalSummary
->;
+export interface PatientAppointmentItem {
+  _id: Id<"appointments">;
+  id?: string;
+  referenceCode: string;
+  clinicId: Id<"clinics">;
+  clinicName: string;
+  clinicSlug: string;
+  clinicAddress: string;
+  clinicPhone: string;
+  clinicTimezone: string;
+  clinicPrimaryColorHex: string;
+  cancellationWindowHours: number;
+  patientId: Id<"patients">;
+  patientName: string;
+  isDependent: boolean;
+  dentistId: Id<"dentists">;
+  dentistName: string;
+  chairId: Id<"chairs">;
+  chairName: string;
+  serviceId: Id<"services">;
+  serviceName: string;
+  serviceCategory: string;
+  durationMinutes: number;
+  pricePhp: number;
+  dateKey: string;
+  startTimeUtc: number;
+  endTimeUtc: number;
+  bufferEndTimeUtc: number;
+  status: AppointmentStatus;
+  bookingSource: string;
+  chiefComplaint?: string | null;
+  clinicalNotes?: string | null;
+  postVisitInstructions?: string | null;
+  cancellationReason?: string | null;
+  canModify: boolean;
+  createdAt: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
+
+export interface PatientWaitlistItem {
+  _id: Id<"waitlist">;
+  id?: string;
+  clinicId: Id<"clinics">;
+  clinicName: string;
+  clinicSlug: string;
+  patientId: Id<"patients">;
+  patientName: string;
+  isDependent: boolean;
+  serviceId: Id<"services">;
+  serviceName: string;
+  preferredDentistId?: Id<"dentists"> | null;
+  preferredDentistName?: string | null;
+  preferredDateKey: string;
+  preferredTimeWindow: "morning" | "afternoon" | "any";
+  status: WaitlistStatus;
+  createdAt: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
+
+export interface FeaturedClinicItem {
+  _id: Id<"clinics">;
+  id?: string;
+  name: string;
+  slug: string;
+  tagline?: string | null;
+  city: string;
+  province: string;
+  primaryColorHex: string;
+  logoUrl?: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
+
+export interface PatientAnnouncementItem {
+  _id: Id<"systemAnnouncements">;
+  id?: string;
+  title: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  createdAt: number;
+}
+
+export interface PatientDashboardData {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  user?: any;
+  profiles: PatientProfileItem[];
+  appointments: PatientAppointmentItem[];
+  waitlist: PatientWaitlistItem[];
+  featuredClinics: FeaturedClinicItem[];
+  announcements: PatientAnnouncementItem[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
+
+export interface PatientClinicalSummary {
+  patientId?: Id<"patients">;
+  toothRecords: Array<{
+    _id: Id<"toothRecords">;
+    toothNumber: number;
+    surface?: ToothSurface | null;
+    condition: ToothCondition;
+    treatmentStatus: TreatmentStatus;
+    notes?: string | null;
+    recordedByDentistName?: string;
+    updatedAt: number;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any;
+  }>;
+  files: Array<{
+    _id: Id<"clinicalFiles">;
+    fileName: string;
+    fileType: "xray_periapical" | "xray_panoramic" | "intraoral_photo" | "consent_form";
+    sizeBytes: number;
+    createdAt: number;
+    url: string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any;
+  }>;
+  clinicalFiles: Array<{
+    _id: Id<"clinicalFiles">;
+    fileName: string;
+    fileType: "xray_periapical" | "xray_panoramic" | "intraoral_photo" | "consent_form";
+    sizeBytes: number;
+    createdAt: number;
+    url: string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any;
+  }>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  completedVisits: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
 
 export type PatientNavTab =
   | "overview"

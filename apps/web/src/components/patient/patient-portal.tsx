@@ -1,7 +1,7 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useApiAuth, useMutation, useQuery } from "@/lib/api";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -36,7 +36,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@/lib/api";
 
 const NAV_ITEMS: Array<{
   id: PatientNavTab;
@@ -66,7 +66,7 @@ function ConnectedPatientPortal() {
     return () => window.clearTimeout(id);
   }, []);
 
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const { isAuthenticated, isLoading: authLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const currentUser = useQuery(
     api.users.current,
@@ -473,10 +473,10 @@ export function PatientPortal() {
         <main className="mx-auto flex w-full max-w-xl flex-1 items-center p-6">
           <Alert className="rounded-[24px] bg-white">
             <ShieldCheck className="size-4 text-[#6C5CE7]" />
-            <AlertTitle>Connect Clerk &amp; Convex to open Patient Portal</AlertTitle>
+            <AlertTitle>Connect Clerk &amp; Smile API to open Patient Portal</AlertTitle>
             <AlertDescription>
               Configure <code>.env.local</code> and run{" "}
-              <code>npx convex dev</code> to view your live appointments, family
+              <code>npm run dev:api</code> to view your live appointments, family
               dependents, and dental records.
             </AlertDescription>
           </Alert>

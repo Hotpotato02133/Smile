@@ -1,4 +1,4 @@
-import { ConvexError } from "convex/values";
+import { ApiClientError } from "@/lib/api/types";
 
 const phpFormatter = new Intl.NumberFormat("en-PH", {
   style: "currency",
@@ -61,12 +61,8 @@ export function slugify(input: string): string {
 }
 
 export function getErrorMessage(error: unknown, fallback = "Something went wrong."): string {
-  if (error instanceof ConvexError) {
-    const data = error.data as { message?: string } | string | undefined;
-    if (typeof data === "string") return data;
-    if (data && typeof data === "object" && typeof data.message === "string") {
-      return data.message;
-    }
+  if (error instanceof ApiClientError) {
+    return error.message || fallback;
   }
   if (error instanceof Error && error.message) {
     return error.message;
@@ -75,11 +71,8 @@ export function getErrorMessage(error: unknown, fallback = "Something went wrong
 }
 
 export function getErrorCode(error: unknown): string | null {
-  if (error instanceof ConvexError) {
-    const data = error.data as { code?: string } | undefined;
-    if (data && typeof data === "object" && typeof data.code === "string") {
-      return data.code;
-    }
+  if (error instanceof ApiClientError) {
+    return error.code || null;
   }
   return null;
 }

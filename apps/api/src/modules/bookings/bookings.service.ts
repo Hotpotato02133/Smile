@@ -15,6 +15,7 @@ import { AppointmentsService } from "../appointments/appointments.service";
 import { assertClinicFeature } from "../auth/guards/clinic-quota.guard";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { SchedulingService } from "../scheduling/scheduling.service";
+import { StorageService } from "../storage/storage.service";
 import type {
   CancelMyAppointmentDto,
   ClaimWaitlistDto,
@@ -31,7 +32,8 @@ export class BookingsService {
     private readonly prisma: PrismaService,
     private readonly appointmentsService: AppointmentsService,
     private readonly schedulingService: SchedulingService,
-    private readonly realtime: RealtimeGateway
+    private readonly realtime: RealtimeGateway,
+    private readonly storageService: StorageService
   ) {}
 
   // ============================================================================
@@ -241,6 +243,71 @@ export class BookingsService {
     ]);
 
     return { profiles, appointments, waitlist };
+  }
+
+  async getMyClinicalSummary(user: User, patientId?: string) {
+    const ownedIds = await this.getOwnedPatientIds(user.id);
+    if (ownedIds.length === 0) {
+      return { toothRecords: [], files: [], completedVisits: [] };
+    }
+    const targetIds =
+      patientId && ownedIds.includes(patientId) ? [patientId] : ownedIds;
+
+    const [toothRecords, files, completedVisits] = await Promise.all([
+      this.prisma.toothRecord.findMany({
+        where: { patientId: { in: targetIds } },
+        include: {
+          recordedByDentist: { select: { displayName: true } },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 100,
+      }),
+      this.prisma.clinicalFile.findMany({
+        where: { patientId: { in: targetIds } },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      }),
+      this.prisma.appointment.findMany({
+        where: { patientId: { in: targetIds }, status: "completed" },
+        include: {
+          clinic: { select: { name: true, slug: true } },
+          service: { select: { name: true } },
+          dentist: { select: { displayName: true } },
+        },
+        orderBy: { startTimeUtc: "desc" },
+        take: 30,
+      }),
+    ]);
+
+    const enrichedFiles = await Promise.all(
+      files.map(async (f) => ({
+        ...f,
+        url: await this.storageService.createPresignedGetUrl(f.storageKey, 300),
+      }))
+    );
+
+    return {
+      toothRecords: toothRecords.map((r) => ({
+        ...r,
+        recordedByDentistName: r.recordedByDentist.displayName,
+      })),
+      files: enrichedFiles,
+      completedVisits,
+    };
+  }
+
+  async getWaitlistEntryForClaim(user: User, waitlistId: string) {
+    const entry = await this.prisma.waitlistEntry.findUnique({
+      where: { id: waitlistId },
+      include: {
+        clinic: { select: { id: true, name: true, slug: true } },
+        service: true,
+        preferredDentist: { select: { id: true, displayName: true } },
+      },
+    });
+    if (!entry) return null;
+    await this.assertPatientOwnedByUser(user.id, entry.patientId);
+    return entry;
   }
 
   async getMyProfilesForClinic(user: User, clinicId: string) {

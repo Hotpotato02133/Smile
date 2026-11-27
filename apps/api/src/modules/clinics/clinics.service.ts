@@ -776,6 +776,44 @@ export class ClinicsService {
     });
   }
 
+  async resendStaffInvitation(
+    tenant: TenantContext,
+    actor: User,
+    invitationId: string
+  ) {
+    const inv = await this.prisma.staffInvitation.findFirst({
+      where: {
+        id: invitationId,
+        clinicId: tenant.clinicId,
+        status: StaffInvitationStatus.pending,
+      },
+    });
+    if (!inv) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Pending invitation not found.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    const updated = await this.prisma.staffInvitation.update({
+      where: { id: inv.id },
+      data: {
+        token: inv.token ?? generateInviteToken(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      },
+    });
+    await this.auditService.record({
+      actorUserId: actor.id,
+      actorRole: actor.role,
+      clinicId: tenant.clinicId,
+      actionType: "STAFF_INVITATION_RESENT",
+      targetEntity: "staff_invitations",
+      targetId: inv.id,
+      metadata: { email: inv.email, role: inv.role },
+    });
+    return updated;
+  }
+
   async revokeStaffInvitation(
     tenant: TenantContext,
     actor: User,

@@ -281,6 +281,18 @@ export class ClinicsController {
     return this.clinicsService.inviteStaff(tenant, actor, dto);
   }
 
+  @Post("staff/invitations/:id/resend")
+  @RequireClinicAccess(["clinic_admin"])
+  @RequireClinicWrite("staff")
+  @ApiOperation({ summary: "Refresh expiry and resend a clinic staff invitation" })
+  resendStaffInvitation(
+    @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
+    @Param("id") id: string
+  ) {
+    return this.clinicsService.resendStaffInvitation(tenant, actor, id);
+  }
+
   @Delete("staff/invitations/:id")
   @RequireClinicAccess(["clinic_admin"])
   @RequireClinicWrite("staff")

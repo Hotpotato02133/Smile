@@ -29,7 +29,7 @@ export default function SignInPage() {
           <pre className="mt-4 overflow-x-auto rounded-2xl bg-[#F4F8FC] p-4 font-mono text-xs leading-relaxed text-slate-800">
             {`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
-NEXT_PUBLIC_CONVEX_URL=https://...convex.cloud
+NEXT_PUBLIC_API_URL=http://localhost:4000
 SUPER_ADMIN_EMAIL=you@example.com`}
           </pre>
           <div className="mt-5">

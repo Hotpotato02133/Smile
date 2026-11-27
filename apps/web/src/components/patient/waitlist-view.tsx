@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "convex/react";
+import { useMutation } from "@/lib/api";
 import { useState } from "react";
 import Link from "next/link";
 import {
@@ -13,8 +13,8 @@ import {
 import { toast } from "sonner";
 import { cn } from "cn";
 import { formatShortDateKey, getErrorMessage } from "@/lib/format";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 import type { PatientDashboardData } from "@/components/patient/types";
 
 interface WaitlistViewProps {

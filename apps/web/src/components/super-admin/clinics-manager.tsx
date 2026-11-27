@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   ArrowUpRight,
   Building2,
@@ -78,8 +78,8 @@ import {
   slugify,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 const createClinicSchema = z.object({
   name: z.string().min(2, "Clinic name is required"),
@@ -145,7 +145,7 @@ const FEATURE_META: {
   {
     key: "xrayStorageEnabled",
     label: "X-Ray & Photo Vault",
-    description: "Compressed Convex File Storage uploads",
+    description: "Compressed Cloudflare R2 presigned uploads",
   },
   {
     key: "waitlistAutomationEnabled",

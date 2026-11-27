@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "@/lib/api";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -52,8 +52,8 @@ import {
   getErrorMessage,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { api } from "../../../convex/_generated/api";
-import type { Id } from "../../../convex/_generated/dataModel";
+import { api } from "@/lib/api";
+import type { Id } from "@/lib/api";
 
 const mrrChartConfig = {
   mrrPhp: {
@@ -729,12 +729,12 @@ export function OverviewDashboard() {
               Free-Tier Resource Gauges
             </h2>
             <p className="text-xs text-slate-500">
-              Monitor usage against $0/mo Convex, Resend, and Clerk limits
+              Monitor usage against $0/mo Cloudflare R2, Resend, and Clerk limits
             </p>
 
             <div className="mt-5 space-y-4">
               <QuotaBar
-                label="Convex File Storage (X-Rays & Receipts)"
+                label="Cloudflare R2 Storage (X-Rays & Receipts)"
                 valueText={`${formatBytes(freeTier.storage.usedBytes)} / ${formatBytes(freeTier.storage.limitBytes)}`}
                 percent={freeTier.storage.percentUsed}
                 accentClass="bg-[#6C5CE7]"

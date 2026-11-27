@@ -25,6 +25,8 @@ import type { AppEnv } from "../../config/env";
 import { PrismaService } from "../../infra/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { ClerkService } from "../auth/clerk.service";
+import { JobsService } from "../jobs/jobs.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import type {
   ChangeClinicPlanDto,
   CreateAnnouncementDto,
@@ -64,7 +66,9 @@ export class SuperAdminService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly clerkService: ClerkService,
-    private readonly configService: ConfigService<AppEnv, true>
+    private readonly configService: ConfigService<AppEnv, true>,
+    private readonly jobsService: JobsService,
+    private readonly notifications: NotificationsService
   ) {}
 
   private isRootOwner(user: User): boolean {
@@ -887,5 +891,162 @@ export class SuperAdminService {
     ]);
 
     return { items, total, limit: take, offset: skip };
+  }
+
+  async listAuditActors() {
+    const grouped = await this.prisma.platformAuditLog.groupBy({
+      by: ["actorUserId"],
+      orderBy: { actorUserId: "asc" },
+      take: 100,
+    });
+    const ids = grouped.map((g) => g.actorUserId);
+    if (ids.length === 0) return [];
+    return this.prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, email: true, firstName: true, lastName: true, role: true },
+    });
+  }
+
+  async sendRenewalReminder(actor: User, clinicId: string) {
+    const clinic = await this.prisma.clinic.findUnique({ where: { id: clinicId } });
+    if (!clinic) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Clinic not found.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    const dispatch = await this.notifications.sendSubscriptionStatusAlert({
+      clinicId: clinic.id,
+      clinicName: clinic.name,
+      clinicEmail: clinic.email,
+      newStatus: clinic.status === "suspended" ? "suspended" : "past_due",
+      subscriptionEndsAt: clinic.subscriptionEndsAt,
+      gracePeriodEndsAt: clinic.gracePeriodEndsAt ?? undefined,
+    });
+    await this.auditService.record({
+      actorUserId: actor.id,
+      actorRole: actor.role,
+      clinicId: clinic.id,
+      actionType: "RENEWAL_REMINDER_SENT",
+      targetEntity: "clinics",
+      targetId: clinic.id,
+      metadata: { sent: dispatch.sent, email: clinic.email },
+    });
+    return { sent: dispatch.sent, reason: dispatch.reason };
+  }
+
+  async resendInvitation(actor: User, invitationId: string) {
+    const inv = await this.prisma.staffInvitation.findUnique({
+      where: { id: invitationId },
+    });
+    if (!inv || inv.status !== StaffInvitationStatus.pending) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Pending invitation not found.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    const updated = await this.prisma.staffInvitation.update({
+      where: { id: inv.id },
+      data: {
+        token: inv.token ?? generateInviteToken(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      },
+    });
+    await this.auditService.record({
+      actorUserId: actor.id,
+      actorRole: actor.role,
+      clinicId: inv.clinicId,
+      actionType: "ROLE_INVITATION_RESENT",
+      targetEntity: "staff_invitations",
+      targetId: inv.id,
+      metadata: { email: inv.email, role: inv.role },
+    });
+    return updated;
+  }
+
+  async ensureDefaultPlans() {
+    const MB = BigInt(1024 * 1024);
+    const defaults = [
+      {
+        code: "trial" as const,
+        name: "Free 14-Day Trial",
+        description: "Try Smile free for 14 days.",
+        monthlyPricePhp: 0,
+        annualPricePhp: 0,
+        trialDays: 14,
+        maxDentists: 1,
+        maxChairs: 1,
+        maxAppointmentsPerMonth: 50,
+        maxStorageBytes: BigInt(50) * MB,
+        maxEmailsPerMonth: 100,
+        defaultFeatures: {
+          odontogramEnabled: true,
+          xrayStorageEnabled: false,
+          waitlistAutomationEnabled: false,
+          recallAutomationEnabled: false,
+          customBrandingEnabled: false,
+        },
+        isActive: true,
+      },
+      {
+        code: "starter" as const,
+        name: "Smile Starter",
+        description: "For small clinics getting started.",
+        monthlyPricePhp: 1499,
+        annualPricePhp: 14990,
+        trialDays: 0,
+        maxDentists: 2,
+        maxChairs: 2,
+        maxAppointmentsPerMonth: 300,
+        maxStorageBytes: BigInt(150) * MB,
+        maxEmailsPerMonth: 400,
+        defaultFeatures: {
+          odontogramEnabled: true,
+          xrayStorageEnabled: true,
+          waitlistAutomationEnabled: false,
+          recallAutomationEnabled: false,
+          customBrandingEnabled: false,
+        },
+        isActive: true,
+      },
+      {
+        code: "pro" as const,
+        name: "Smile Pro Clinic",
+        description: "Full Odontogram, X-ray vault and recall automation.",
+        monthlyPricePhp: 2999,
+        annualPricePhp: 29990,
+        trialDays: 0,
+        maxDentists: 8,
+        maxChairs: 8,
+        maxAppointmentsPerMonth: 1500,
+        maxStorageBytes: BigInt(400) * MB,
+        maxEmailsPerMonth: 1000,
+        defaultFeatures: {
+          odontogramEnabled: true,
+          xrayStorageEnabled: true,
+          waitlistAutomationEnabled: true,
+          recallAutomationEnabled: true,
+          customBrandingEnabled: true,
+        },
+        isActive: true,
+      },
+    ];
+    let created = 0;
+    for (const plan of defaults) {
+      const existing = await this.prisma.subscriptionPlan.findUnique({
+        where: { code: plan.code },
+      });
+      if (!existing) {
+        await this.prisma.subscriptionPlan.create({ data: plan });
+        created++;
+      }
+    }
+    return { plansCreated: created };
+  }
+
+  async triggerDailyRollup(dateKey?: string) {
+    return this.jobsService.rollupDailyAnalytics(dateKey);
   }
 }
