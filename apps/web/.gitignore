@@ -1,0 +1,7 @@
+# Workspace-local ignore so Tailwind v4 / Turbopack scanners never watch build output
+.next/
+out/
+build/
+node_modules/
+.env*.local
+*.tsbuildinfo
