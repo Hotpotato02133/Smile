@@ -17,7 +17,7 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
       ? new Pool({
           connectionString: databaseUrl,
           max: 10,
-          connectionTimeoutMillis: 5000,
+          connectionTimeoutMillis: 10000,
           idleTimeoutMillis: 30000,
         })
       : new Pool({

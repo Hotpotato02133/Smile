@@ -26,20 +26,25 @@ export function useApiAuth(): { isAuthenticated: boolean; isLoading: boolean } {
 }
 
 /**
- * Typed TanStack Query hook bound to Smile's NestJS REST API (`@smile/api`).
- * Pass `"skip"` as args to disable fetching conditionally.
+ * Full TanStack Query state hook bound to Smile's NestJS REST API (`@smile/api`).
+ * Use when a screen needs explicit loading/error/refetch handling (e.g. `/post-login`).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useApiQuery<TResult = any>(
+export function useApiQueryState<TResult = any>(
   endpoint: ApiEndpoint<AnyArgs, TResult>,
   args?: AnyArgs | "skip"
-): TResult | undefined {
+): {
+  data: TResult | undefined;
+  isLoading: boolean;
+  error: Error | null;
+  refetch: () => Promise<unknown>;
+} {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   const isSkipped = args === "skip";
   const resolvedArgs = isSkipped ? {} : (args ?? {});
   const authReady = endpoint.isPublic ? true : isLoaded;
 
-  const query = useTanStackQuery<TResult>({
+  const query = useTanStackQuery<TResult, Error>({
     queryKey: [endpoint.key, resolvedArgs],
     enabled: !isSkipped && authReady,
     staleTime: 15_000,
@@ -60,7 +65,24 @@ export function useApiQuery<TResult = any>(
     },
   });
 
-  return query.data;
+  return {
+    data: query.data,
+    isLoading: !isSkipped && (!authReady || query.isLoading),
+    error: query.error ?? null,
+    refetch: query.refetch,
+  };
+}
+
+/**
+ * Typed TanStack Query hook bound to Smile's NestJS REST API (`@smile/api`).
+ * Pass `"skip"` as args to disable fetching conditionally.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function useApiQuery<TResult = any>(
+  endpoint: ApiEndpoint<AnyArgs, TResult>,
+  args?: AnyArgs | "skip"
+): TResult | undefined {
+  return useApiQueryState(endpoint, args).data;
 }
 
 /**

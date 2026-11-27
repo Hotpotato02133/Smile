@@ -1,6 +1,6 @@
 "use client";
 
-import { useApiAuth, useMutation, useQuery } from "@/lib/api";
+import { useApiAuth, useApiQueryState, useMutation } from "@/lib/api";
 import { AlertTriangle, LifeBuoy, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -29,9 +29,22 @@ function PostLoginRedirector() {
   const router = useRouter();
   const { isAuthenticated, isLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
-  const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
+  const {
+    data: user,
+    error: userError,
+    refetch: refetchUser,
+  } = useApiQueryState(api.users.current, isAuthenticated ? {} : "skip");
   const syncStartedRef = useRef(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+
+  const effectiveError =
+    syncError ??
+    (userError
+      ? getErrorMessage(
+          userError,
+          "Could not reach the Smile backend API. Make sure the API server is running and try again."
+        )
+      : null);
 
   useEffect(() => {
     if (!isAuthenticated || user !== null || syncStartedRef.current) return;
@@ -47,6 +60,12 @@ function PostLoginRedirector() {
     };
   }, [isAuthenticated, user, ensureUser]);
 
+  const handleRetry = () => {
+    syncStartedRef.current = false;
+    setSyncError(null);
+    void refetchUser();
+  };
+
   useEffect(() => {
     if (user && user.isActive) router.replace(ROLE_HOME[user.role]);
   }, [user, router]);
@@ -59,9 +78,9 @@ function PostLoginRedirector() {
     return <AccountDeactivatedCard />;
   }
 
-  if (syncError) {
-    if (isDeactivatedMessage(syncError)) {
-      return <AccountDeactivatedCard reason={syncError} />;
+  if (effectiveError) {
+    if (isDeactivatedMessage(effectiveError)) {
+      return <AccountDeactivatedCard reason={effectiveError} />;
     }
 
     return (
@@ -82,12 +101,12 @@ function PostLoginRedirector() {
                 <h1 className="text-xl font-bold tracking-tight text-slate-950">
                   Unable to open your account
                 </h1>
-                <p className="text-sm text-slate-600">{syncError}</p>
+                <p className="text-sm text-slate-600">{effectiveError}</p>
               </div>
               <div className="space-y-2">
                 <Button
                   type="button"
-                  onClick={() => window.location.reload()}
+                  onClick={handleRetry}
                   className="h-10 w-full rounded-full bg-[#6C5CE7] text-xs font-semibold text-white hover:bg-[#5B4BD6]"
                 >
                   <RefreshCw className="mr-1.5 size-3.5" />

@@ -61,6 +61,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         auth: token ? { token } : {},
         autoConnect: true,
         reconnectionDelay: 2000,
+        reconnectionDelayMax: 15000,
+        reconnectionAttempts: 10,
       });
       socketRef.current = socket;
 

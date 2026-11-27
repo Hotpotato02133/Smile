@@ -18,7 +18,7 @@ export class PostgresHealthService implements OnModuleDestroy {
     this.pool = new Pool({
       connectionString: databaseUrl,
       max: 2,
-      connectionTimeoutMillis: 2000,
+      connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 10000,
     });
   }

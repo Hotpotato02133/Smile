@@ -9,6 +9,7 @@ export {
   useApiPaginatedQuery as usePaginatedQuery,
   useApiQuery,
   useApiQuery as useQuery,
+  useApiQueryState,
 } from "./hooks";
 export type {
   AppointmentItem,
