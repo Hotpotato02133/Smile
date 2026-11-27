@@ -576,6 +576,9 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
       .set("Authorization", "Bearer root-token")
       .expect(200);
     expect(overviewRes.body.statusDistribution).toHaveLength(5);
+    expect(typeof overviewRes.body.completionRatePct).toBe("number");
+    expect(typeof overviewRes.body.noShowRatePct).toBe("number");
+    expect(typeof overviewRes.body.thirtyDayTotalBooked).toBe("number");
 
     const usageRes = await request(app.getHttpServer())
       .get("/api/v1/super-admin/analytics/free-tier-usage")
@@ -586,6 +589,17 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
     expect(usageRes.body.emails.sentThisMonth).toBe(25);
     expect(usageRes.body.emails.monthlyLimit).toBe(3000);
     expect(usageRes.body.emails.topClinics).toHaveLength(1);
+    expect(usageRes.body.clerkMau.activeLast30Days).toBe(4);
+    expect(usageRes.body.clerkMau.monthlyLimit).toBe(10000);
+
+    const leaderboardRes = await request(app.getHttpServer())
+      .get("/api/v1/super-admin/analytics/leaderboard?limit=8")
+      .set("Authorization", "Bearer root-token")
+      .expect(200);
+    expect(leaderboardRes.body[0].city).toBe("Makati");
+    expect(leaderboardRes.body[0].maxDentists).toBe(10);
+    expect(leaderboardRes.body[0].maxChairs).toBe(8);
+    expect(leaderboardRes.body[0].maxAppointmentsPerMonth).toBe(2000);
   });
 
   it("Clinic Admin endpoints return enriched billing, dentists, and staff payloads", async () => {

@@ -205,6 +205,15 @@ export class PlatformAnalyticsService {
       0
     );
 
+    const completionRatePct =
+      thirtyDayBooked > 0
+        ? Math.round((thirtyDayCompleted / thirtyDayBooked) * 100)
+        : 0;
+    const noShowRatePct =
+      thirtyDayBooked > 0
+        ? Math.round((thirtyDayNoShow / thirtyDayBooked) * 100)
+        : 0;
+
     return {
       totalClinics: clinics.length,
       activePaidClinics,
@@ -223,19 +232,16 @@ export class PlatformAnalyticsService {
       currentMonthAppointments,
       lifetimeAppointments,
       todayAppointments: todayRow?.totalAppointmentsBooked ?? 0,
+      thirtyDayTotalBooked: thirtyDayBooked,
+      completionRatePct,
+      noShowRatePct,
       thirtyDayStats: {
         booked: thirtyDayBooked,
         completed: thirtyDayCompleted,
         cancelled: thirtyDayCancelled,
         noShow: thirtyDayNoShow,
-        completionRatePct:
-          thirtyDayBooked > 0
-            ? Math.round((thirtyDayCompleted / thirtyDayBooked) * 100)
-            : 0,
-        noShowRatePct:
-          thirtyDayBooked > 0
-            ? Math.round((thirtyDayNoShow / thirtyDayBooked) * 100)
-            : 0,
+        completionRatePct,
+        noShowRatePct,
       },
       activeAnnouncementsCount,
       pendingInvitationsCount,
@@ -272,7 +278,17 @@ export class PlatformAnalyticsService {
     const take = Math.min(Math.max(limit, 1), 50);
     const clinics = await this.prisma.clinic.findMany({
       where: { status: { not: "archived" } },
-      include: { plan: { select: { code: true, name: true } } },
+      include: {
+        plan: {
+          select: {
+            code: true,
+            name: true,
+            maxDentists: true,
+            maxChairs: true,
+            maxAppointmentsPerMonth: true,
+          },
+        },
+      },
       orderBy: [
         { currentMonthAppointmentCount: "desc" },
         { lifetimeAppointmentCount: "desc" },
@@ -284,8 +300,12 @@ export class PlatformAnalyticsService {
       id: c.id,
       name: c.name,
       slug: c.slug,
+      city: c.city,
       status: c.status,
       planName: c.plan.name,
+      maxDentists: c.plan.maxDentists,
+      maxChairs: c.plan.maxChairs,
+      maxAppointmentsPerMonth: c.plan.maxAppointmentsPerMonth,
       currentMonthAppointmentCount: c.currentMonthAppointmentCount,
       lifetimeAppointmentCount: c.lifetimeAppointmentCount,
       activeDentistCount: c.activeDentistCount,
@@ -367,6 +387,11 @@ export class PlatformAnalyticsService {
         totalActive: totalUsers,
         limitMau: CLERK_FREE_MAU_LIMIT,
         usagePct: usersPct,
+        percentUsed: usersPct,
+      },
+      clerkMau: {
+        activeLast30Days: totalUsers,
+        monthlyLimit: CLERK_FREE_MAU_LIMIT,
         percentUsed: usersPct,
       },
       totalClinics: clinicAgg._count.id,

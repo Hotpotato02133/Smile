@@ -26,6 +26,7 @@ import { WebhooksModule } from "./modules/webhooks/webhooks.module";
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      ignoreEnvFile: process.env.NODE_ENV === "test",
       validate: validateEnv,
       envFilePath: [".env.local", ".env"],
     }),

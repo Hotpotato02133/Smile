@@ -976,7 +976,7 @@ export class SuperAdminService {
       targetId: clinic.id,
       metadata: { sent: dispatch.sent, email: clinic.email },
     });
-    return { sent: dispatch.sent, reason: dispatch.reason };
+    return { sent: dispatch.sent, sentTo: clinic.email, reason: dispatch.reason };
   }
 
   async resendInvitation(actor: User, invitationId: string) {

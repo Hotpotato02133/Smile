@@ -73,11 +73,22 @@ export const updateClinicFeaturesSchema = z.object({
   featureFlags: ClinicFeatureFlagsSchema,
 });
 
-export const extendClinicSubscriptionSchema = z.object({
-  days: z.number().int().min(1).max(730),
-  reactivateIfSuspended: z.boolean().default(true),
-  reason: z.string().trim().max(500).optional(),
-});
+export const extendClinicSubscriptionSchema = z
+  .object({
+    days: z.number().int().min(1).max(730).optional(),
+    extraDays: z.number().int().min(1).max(730).optional(),
+    reactivateIfSuspended: z.boolean().default(true),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine((data) => (data.days ?? data.extraDays) !== undefined, {
+    message: "days (or extraDays) is required",
+    path: ["days"],
+  })
+  .transform((data) => ({
+    days: (data.days ?? data.extraDays)!,
+    reactivateIfSuspended: data.reactivateIfSuspended,
+    reason: data.reason,
+  }));
 
 export const createRoleInvitationSchema = z.object({
   email: z.string().trim().email().transform((s) => s.toLowerCase()),

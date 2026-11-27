@@ -165,7 +165,13 @@ export const api = {
       "superAdmin.extendSubscription",
       "POST",
       (a) => `/api/v1/super-admin/clinics/${a.clinicId}/extend`,
-      { invalidates: ["superAdmin", "platformAnalytics", "clinicAdmin"] }
+      {
+        invalidates: ["superAdmin", "platformAnalytics", "clinicAdmin"],
+        buildBody: (a) => ({
+          ...a,
+          days: a.days ?? a.extraDays,
+        }),
+      }
     ),
     inviteClinicAdmin: mutationEndpoint(
       "superAdmin.inviteClinicAdmin",
@@ -396,6 +402,8 @@ export const api = {
           const storage = (data.storage ?? {}) as AnyRecord;
           const emails = (data.emails ?? {}) as AnyRecord;
           const users = (data.users ?? {}) as AnyRecord;
+          const clerkMau = (data.clerkMau ?? {}) as AnyRecord;
+          const usersPct = clerkMau.percentUsed ?? users.percentUsed ?? users.usagePct ?? 0;
           return {
             ...data,
             storage: {
@@ -412,7 +420,13 @@ export const api = {
             },
             users: {
               ...users,
-              percentUsed: users.percentUsed ?? users.usagePct ?? 0,
+              percentUsed: usersPct,
+            },
+            clerkMau: {
+              activeLast30Days:
+                clerkMau.activeLast30Days ?? users.totalActive ?? 0,
+              monthlyLimit: clerkMau.monthlyLimit ?? users.limitMau ?? 10000,
+              percentUsed: usersPct,
             },
           } as unknown as FreeTierUsageData;
         },

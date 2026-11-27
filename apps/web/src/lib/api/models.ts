@@ -519,6 +519,11 @@ export interface FreeTierUsageData {
     usagePct: number;
     percentUsed: number;
   };
+  clerkMau: {
+    activeLast30Days: number;
+    monthlyLimit: number;
+    percentUsed: number;
+  };
   totalClinics: number;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;

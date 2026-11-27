@@ -5,7 +5,7 @@ import { shadcn } from "@clerk/ui/themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createContext, type ReactNode, useContext, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
-import { API_BASE_URL, SocketProvider } from "@/lib/api";
+import { API_BASE_URL, ApiClientError, SocketProvider } from "@/lib/api";
 
 const clerkPublishableKey =
   process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() ?? "";
@@ -60,8 +60,20 @@ export function AppProviders({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            retry: 1,
-            refetchOnWindowFocus: false,
+            retry: (failureCount, error) => {
+              if (
+                error instanceof ApiClientError &&
+                error.statusCode >= 400 &&
+                error.statusCode < 500
+              ) {
+                return false;
+              }
+              return failureCount < 5;
+            },
+            retryDelay: (attemptIndex) =>
+              Math.min(1000 * 2 ** attemptIndex, 8000),
+            refetchOnReconnect: true,
+            refetchOnWindowFocus: true,
           },
         },
       })

@@ -71,6 +71,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         if (token) {
           socket.emit("join:clinic", {});
         }
+        // Auto-hydrate any queries that failed or went stale while API was booting/restarting
+        void queryClient.refetchQueries({
+          type: "active",
+          predicate: (q) => q.state.status === "error" || q.isStale(),
+        });
       });
 
       socket.on("disconnect", () => {
@@ -116,7 +121,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         socketRef.current = null;
       }
     };
-  }, [isLoaded, isSignedIn, getToken, invalidatePrefixes]);
+  }, [isLoaded, isSignedIn, getToken, invalidatePrefixes, queryClient]);
 
   const subscribePublicClinic = useCallback((slug: string) => {
     if (!slug) return;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "@/lib/api";
+import { useApiQueryState, useMutation } from "@/lib/api";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -150,14 +150,39 @@ export function OverviewDashboard() {
   const [rollingUp, setRollingUp] = useState(false);
   const [busyRenewalId, setBusyRenewalId] = useState<string | null>(null);
 
-  const overview = useQuery(api.platformAnalytics.getDashboardOverview, {});
-  const dailySeries = useQuery(api.platformAnalytics.getDailyMetricsSeries, {
-    days: windowDays,
-  });
-  const leaderboard = useQuery(api.platformAnalytics.getClinicLeaderboard, {
-    limit: 8,
-  });
-  const freeTier = useQuery(api.platformAnalytics.getFreeTierUsage, {});
+  const overviewQuery = useApiQueryState(
+    api.platformAnalytics.getDashboardOverview,
+    {}
+  );
+  const dailySeriesQuery = useApiQueryState(
+    api.platformAnalytics.getDailyMetricsSeries,
+    { days: windowDays }
+  );
+  const leaderboardQuery = useApiQueryState(
+    api.platformAnalytics.getClinicLeaderboard,
+    { limit: 8 }
+  );
+  const freeTierQuery = useApiQueryState(
+    api.platformAnalytics.getFreeTierUsage,
+    {}
+  );
+  const overview = overviewQuery.data;
+  const dailySeries = dailySeriesQuery.data;
+  const leaderboard = leaderboardQuery.data;
+  const freeTier = freeTierQuery.data;
+  const loadError =
+    overviewQuery.error ??
+    dailySeriesQuery.error ??
+    leaderboardQuery.error ??
+    freeTierQuery.error;
+  const handleRetryAll = () => {
+    void Promise.all([
+      overviewQuery.refetch(),
+      dailySeriesQuery.refetch(),
+      leaderboardQuery.refetch(),
+      freeTierQuery.refetch(),
+    ]);
+  };
   const triggerRollup = useMutation(api.superAdmin.triggerDailyRollup);
   const extendSubscription = useMutation(
     api.superAdmin.extendClinicSubscription
@@ -207,6 +232,40 @@ export function OverviewDashboard() {
       setRollingUp(false);
     }
   };
+
+  if (
+    loadError &&
+    (overview === undefined ||
+      dailySeries === undefined ||
+      leaderboard === undefined ||
+      freeTier === undefined)
+  ) {
+    return (
+      <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 rounded-2xl border border-amber-200/80 bg-amber-50/50 p-6 text-center">
+        <AlertTriangle className="size-6 text-amber-600" />
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold text-slate-950">
+            Could not load Platform Overview
+          </h2>
+          <p className="max-w-md text-xs text-slate-600">
+            {getErrorMessage(
+              loadError,
+              "Unable to reach the Smile API backend. Make sure the API server is running and try again."
+            )}
+          </p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          onClick={handleRetryAll}
+          className="h-9 rounded-full bg-[#6C5CE7] px-4 text-xs font-semibold text-white hover:bg-[#5B4BD6]"
+        >
+          <RefreshCw className="mr-1.5 size-3.5" />
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (
     overview === undefined ||
