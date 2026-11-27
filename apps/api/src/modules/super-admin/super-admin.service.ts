@@ -3,11 +3,13 @@ import { ConfigService } from "@nestjs/config";
 import {
   type Clinic,
   ClinicStatus,
+  EmailDeliveryStatus,
   type Prisma,
   ServiceCategory,
   StaffInvitationStatus,
   type SubscriptionPlan,
   type User,
+  type UserRole,
 } from "@prisma/client";
 import {
   API_ERROR_CODES,
@@ -225,7 +227,7 @@ export class SuperAdminService {
     const subscriptionEndsAt = new Date(now.getTime() + durationDays * DAY_MS);
     const trialEndsAt = status === "trial" ? subscriptionEndsAt : null;
 
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       const clinic = await tx.clinic.create({
         data: {
           name: dto.name,
@@ -278,6 +280,7 @@ export class SuperAdminService {
             token: generateInviteToken(),
             invitedByUserId: actor.id,
             status: StaffInvitationStatus.pending,
+            emailStatus: EmailDeliveryStatus.queued,
             expiresAt: new Date(now.getTime() + 7 * DAY_MS),
           },
         });
@@ -307,6 +310,32 @@ export class SuperAdminService {
         invitation,
       };
     });
+
+    if (created.invitation?.token) {
+      const inviterName =
+        `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+      const delivery = await this.notifications.sendRoleInvitationEmail({
+        invitationId: created.invitation.id,
+        clinicId: null,
+        recipientEmail: created.invitation.email,
+        role: "clinic_admin",
+        scopeName: created.clinic.name,
+        accentHex: created.clinic.primaryColorHex,
+        inviterName,
+        token: created.invitation.token,
+        expiresAt: created.invitation.expiresAt,
+      });
+      return {
+        clinic: created.clinic,
+        invitation: {
+          ...created.invitation,
+          emailStatus: delivery.emailStatus,
+          emailError: delivery.emailError,
+        },
+      };
+    }
+
+    return created;
   }
 
   async updateClinicDetails(
@@ -586,8 +615,23 @@ export class SuperAdminService {
     });
   }
 
-  async listAllUsers(actor: User) {
+  async listAllUsers(
+    actor: User,
+    filters?: { role?: UserRole; search?: string }
+  ) {
+    const where: Prisma.UserWhereInput = {};
+    if (filters?.role) where.role = filters.role;
+    if (filters?.search?.trim()) {
+      const q = filters.search.trim();
+      where.OR = [
+        { email: { contains: q, mode: "insensitive" } },
+        { firstName: { contains: q, mode: "insensitive" } },
+        { lastName: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
     const users = await this.prisma.user.findMany({
+      where,
       include: { clinic: { select: { id: true, name: true, slug: true } } },
       orderBy: { createdAt: "desc" },
       take: 500,
@@ -687,9 +731,22 @@ export class SuperAdminService {
     return updated;
   }
 
-  async listAllInvitations(status?: StaffInvitationStatus) {
-    return this.prisma.staffInvitation.findMany({
-      where: status ? { status } : undefined,
+  async listAllInvitations(filters?: {
+    status?: StaffInvitationStatus;
+    search?: string;
+  }) {
+    const where: Prisma.StaffInvitationWhereInput = {};
+    if (filters?.status) where.status = filters.status;
+    if (filters?.search?.trim()) {
+      const q = filters.search.trim();
+      where.OR = [
+        { email: { contains: q, mode: "insensitive" } },
+        { clinic: { name: { contains: q, mode: "insensitive" } } },
+      ];
+    }
+
+    const rows = await this.prisma.staffInvitation.findMany({
+      where,
       include: {
         clinic: { select: { id: true, name: true, slug: true } },
         invitedByUser: {
@@ -699,6 +756,14 @@ export class SuperAdminService {
       orderBy: { createdAt: "desc" },
       take: 200,
     });
+
+    return rows.map((inv) => ({
+      ...inv,
+      clinicName: inv.clinic?.name ?? null,
+      inviterName:
+        `${inv.invitedByUser.firstName} ${inv.invitedByUser.lastName}`.trim() ||
+        inv.invitedByUser.email,
+    }));
   }
 
   async createRoleInvitation(actor: User, dto: CreateRoleInvitationDto) {
@@ -710,6 +775,8 @@ export class SuperAdminService {
       );
     }
 
+    let targetClinic: { id: string; name: string; primaryColorHex: string } | null =
+      null;
     if (dto.role !== "super_admin") {
       if (!dto.clinicId) {
         throw new DomainException(
@@ -720,6 +787,7 @@ export class SuperAdminService {
       }
       const clinic = await this.prisma.clinic.findUnique({
         where: { id: dto.clinicId },
+        select: { id: true, name: true, primaryColorHex: true },
       });
       if (!clinic) {
         throw new DomainException(
@@ -728,10 +796,11 @@ export class SuperAdminService {
           HttpStatus.NOT_FOUND
         );
       }
+      targetClinic = clinic;
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const invitation = await tx.staffInvitation.create({
+    const invitation = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.staffInvitation.create({
         data: {
           clinicId: dto.role === "super_admin" ? null : dto.clinicId!,
           email: dto.email,
@@ -740,6 +809,7 @@ export class SuperAdminService {
           inviterNote: dto.inviterNote ?? null,
           invitedByUserId: actor.id,
           status: StaffInvitationStatus.pending,
+          emailStatus: EmailDeliveryStatus.queued,
           expiresAt: new Date(Date.now() + dto.expiresInDays * DAY_MS),
         },
       });
@@ -748,17 +818,40 @@ export class SuperAdminService {
         {
           actorUserId: actor.id,
           actorRole: actor.role,
-          clinicId: invitation.clinicId,
+          clinicId: row.clinicId,
           actionType: "ROLE_INVITATION_CREATED",
           targetEntity: "staff_invitations",
-          targetId: invitation.id,
-          metadata: { email: invitation.email, role: invitation.role },
+          targetId: row.id,
+          metadata: { email: row.email, role: row.role },
         },
         tx
       );
 
-      return invitation;
+      return row;
     });
+
+    const inviterName =
+      `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+    const delivery = await this.notifications.sendRoleInvitationEmail({
+      invitationId: invitation.id,
+      clinicId: null,
+      recipientEmail: invitation.email,
+      role: invitation.role,
+      scopeName: targetClinic?.name ?? "Smile Dental SaaS Platform",
+      accentHex: targetClinic?.primaryColorHex ?? "#6C5CE7",
+      inviterName,
+      inviterNote: invitation.inviterNote,
+      token: invitation.token!,
+      expiresAt: invitation.expiresAt,
+    });
+
+    return {
+      ...invitation,
+      clinicName: targetClinic?.name ?? null,
+      inviterName,
+      emailStatus: delivery.emailStatus,
+      emailError: delivery.emailError,
+    };
   }
 
   async revokeInvitation(actor: User, invitationId: string) {
@@ -988,21 +1081,40 @@ export class SuperAdminService {
   async resendInvitation(actor: User, invitationId: string) {
     const inv = await this.prisma.staffInvitation.findUnique({
       where: { id: invitationId },
+      include: {
+        clinic: { select: { id: true, name: true, primaryColorHex: true } },
+      },
     });
-    if (!inv || inv.status !== StaffInvitationStatus.pending) {
+    if (!inv || inv.status === StaffInvitationStatus.accepted) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
-        "Pending invitation not found.",
+        "Resendable invitation not found.",
         HttpStatus.NOT_FOUND
       );
     }
+    if (inv.role === "super_admin" && !this.isRootOwner(actor)) {
+      throw new DomainException(
+        API_ERROR_CODES.FORBIDDEN,
+        "Only the primary Platform Owner may resend Super Admin invitations.",
+        HttpStatus.FORBIDDEN
+      );
+    }
+
+    const token = inv.token ?? generateInviteToken();
+    const expiresAt = new Date(Date.now() + 7 * DAY_MS);
     const updated = await this.prisma.staffInvitation.update({
       where: { id: inv.id },
       data: {
-        token: inv.token ?? generateInviteToken(),
-        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        token,
+        status: StaffInvitationStatus.pending,
+        declineReason: null,
+        respondedAt: null,
+        emailStatus: EmailDeliveryStatus.queued,
+        emailError: null,
+        expiresAt,
       },
     });
+
     await this.auditService.record({
       actorUserId: actor.id,
       actorRole: actor.role,
@@ -1012,7 +1124,29 @@ export class SuperAdminService {
       targetId: inv.id,
       metadata: { email: inv.email, role: inv.role },
     });
-    return updated;
+
+    const inviterName =
+      `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+    const delivery = await this.notifications.sendRoleInvitationEmail({
+      invitationId: updated.id,
+      clinicId: null,
+      recipientEmail: updated.email,
+      role: updated.role,
+      scopeName: inv.clinic?.name ?? "Smile Dental SaaS Platform",
+      accentHex: inv.clinic?.primaryColorHex ?? "#6C5CE7",
+      inviterName,
+      inviterNote: updated.inviterNote,
+      token,
+      expiresAt,
+    });
+
+    return {
+      ...updated,
+      clinicName: inv.clinic?.name ?? null,
+      inviterName,
+      emailStatus: delivery.emailStatus,
+      emailError: delivery.emailError,
+    };
   }
 
   async ensureDefaultPlans() {

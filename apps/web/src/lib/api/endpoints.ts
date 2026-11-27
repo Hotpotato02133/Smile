@@ -191,6 +191,10 @@ export const api = {
       "superAdmin.users",
       () => "/api/v1/super-admin/users",
       {
+        buildQuery: (a) => ({
+          role: a?.role,
+          search: a?.search,
+        }),
         transform: (raw) => {
           if (Array.isArray(raw)) {
             return { callerIsRootOwner: true, users: raw as Array<UserDoc & AnyRecord> };
@@ -208,7 +212,12 @@ export const api = {
     listAllInvitations: queryEndpoint<Array<StaffInvitationDoc & AnyRecord>>(
       "superAdmin.invitations",
       () => "/api/v1/super-admin/invitations",
-      { buildQuery: (a) => ({ status: a?.status }) }
+      {
+        buildQuery: (a) => ({
+          status: a?.status,
+          search: a?.search,
+        }),
+      }
     ),
     createRoleInvitation: mutationEndpoint(
       "superAdmin.createRoleInvitation",

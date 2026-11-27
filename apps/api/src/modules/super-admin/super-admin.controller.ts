@@ -10,7 +10,12 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import type { ClinicStatus, StaffInvitationStatus, User } from "@prisma/client";
+import type {
+  ClinicStatus,
+  StaffInvitationStatus,
+  User,
+  UserRole,
+} from "@prisma/client";
 import { CurrentUser, Roles } from "../../common/decorators/auth.decorators";
 import { ZodValidationPipe } from "../../common/pipes/zod-validation.pipe";
 import { ClerkJwtGuard } from "../auth/guards/clerk-jwt.guard";
@@ -125,8 +130,12 @@ export class SuperAdminController {
 
   @Get("users")
   @ApiOperation({ summary: "List all platform users" })
-  listUsers(@CurrentUser() actor: User) {
-    return this.superAdminService.listAllUsers(actor);
+  listUsers(
+    @CurrentUser() actor: User,
+    @Query("role") role?: UserRole,
+    @Query("search") search?: string
+  ) {
+    return this.superAdminService.listAllUsers(actor, { role, search });
   }
 
   @Patch("users/:id")
@@ -142,8 +151,11 @@ export class SuperAdminController {
 
   @Get("invitations")
   @ApiOperation({ summary: "List all staff and super-admin invitations" })
-  listInvitations(@Query("status") status?: StaffInvitationStatus) {
-    return this.superAdminService.listAllInvitations(status);
+  listInvitations(
+    @Query("status") status?: StaffInvitationStatus,
+    @Query("search") search?: string
+  ) {
+    return this.superAdminService.listAllInvitations({ status, search });
   }
 
   @Post("invitations")

@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from "@nestjs/common";
 import {
+  EmailDeliveryStatus,
   type Prisma,
   ServiceCategory,
   StaffInvitationStatus,
@@ -22,6 +23,7 @@ import { PrismaService } from "../../infra/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { ClerkService } from "../auth/clerk.service";
 import { assertClinicCanWriteResource } from "../auth/guards/clinic-quota.guard";
+import { NotificationsService } from "../notifications/notifications.service";
 import {
   serializeClinic,
   serializePlan,
@@ -48,7 +50,8 @@ export class ClinicsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
-    private readonly clerkService: ClerkService
+    private readonly clerkService: ClerkService,
+    private readonly notifications: NotificationsService
   ) {}
 
   async getWorkspace(tenant: TenantContext, actor: User) {
@@ -786,6 +789,11 @@ export class ClinicsService {
       }),
       this.prisma.staffInvitation.findMany({
         where: { clinicId: tenant.clinicId },
+        include: {
+          invitedByUser: {
+            select: { email: true, firstName: true, lastName: true },
+          },
+        },
         orderBy: { createdAt: "desc" },
         take: 100,
       }),
@@ -798,20 +806,29 @@ export class ClinicsService {
         name: `${m.firstName} ${m.lastName}`.trim() || m.email,
       }));
 
-    const pendingInvitations = invitations.filter(
+    const enrichedInvitations = invitations.map((i) => ({
+      ...i,
+      clinicName: tenant.clinic.name,
+      inviterName: i.invitedByUser
+        ? `${i.invitedByUser.firstName} ${i.invitedByUser.lastName}`.trim() ||
+          i.invitedByUser.email
+        : "",
+    }));
+
+    const pendingInvitations = enrichedInvitations.filter(
       (i) => i.status === StaffInvitationStatus.pending
     );
-    const declinedInvitations = invitations.filter(
+    const declinedInvitations = enrichedInvitations.filter(
       (i) => i.status === StaffInvitationStatus.declined
     );
-    const historicalInvitations = invitations.filter(
+    const historicalInvitations = enrichedInvitations.filter(
       (i) => i.status !== StaffInvitationStatus.pending
     );
 
     return {
       members,
       staff: members,
-      invitations,
+      invitations: enrichedInvitations,
       pendingInvitations,
       declinedInvitations,
       historicalInvitations,
@@ -823,8 +840,8 @@ export class ClinicsService {
     actor: User,
     dto: InviteClinicStaffDto
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const invitation = await tx.staffInvitation.create({
+    const invitation = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.staffInvitation.create({
         data: {
           clinicId: tenant.clinicId,
           email: dto.email,
@@ -833,6 +850,7 @@ export class ClinicsService {
           inviterNote: dto.inviterNote ?? null,
           invitedByUserId: actor.id,
           status: StaffInvitationStatus.pending,
+          emailStatus: EmailDeliveryStatus.queued,
           expiresAt: new Date(Date.now() + dto.expiresInDays * DAY_MS),
         },
       });
@@ -844,14 +862,37 @@ export class ClinicsService {
           clinicId: tenant.clinicId,
           actionType: "STAFF_INVITATION_CREATED",
           targetEntity: "staff_invitations",
-          targetId: invitation.id,
-          metadata: { email: invitation.email, role: invitation.role },
+          targetId: row.id,
+          metadata: { email: row.email, role: row.role },
         },
         tx
       );
 
-      return invitation;
+      return row;
     });
+
+    const inviterName =
+      `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+    const delivery = await this.notifications.sendRoleInvitationEmail({
+      invitationId: invitation.id,
+      clinicId: tenant.clinicId,
+      recipientEmail: invitation.email,
+      role: invitation.role,
+      scopeName: tenant.clinic.name,
+      accentHex: tenant.clinic.primaryColorHex,
+      inviterName,
+      inviterNote: invitation.inviterNote,
+      token: invitation.token!,
+      expiresAt: invitation.expiresAt,
+    });
+
+    return {
+      ...invitation,
+      clinicName: tenant.clinic.name,
+      inviterName,
+      emailStatus: delivery.emailStatus,
+      emailError: delivery.emailError,
+    };
   }
 
   async resendStaffInvitation(
@@ -863,21 +904,27 @@ export class ClinicsService {
       where: {
         id: invitationId,
         clinicId: tenant.clinicId,
-        status: StaffInvitationStatus.pending,
       },
     });
-    if (!inv) {
+    if (!inv || inv.status === StaffInvitationStatus.accepted) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
-        "Pending invitation not found.",
+        "Resendable invitation not found.",
         HttpStatus.NOT_FOUND
       );
     }
+    const token = inv.token ?? generateInviteToken();
+    const expiresAt = new Date(Date.now() + 7 * DAY_MS);
     const updated = await this.prisma.staffInvitation.update({
       where: { id: inv.id },
       data: {
-        token: inv.token ?? generateInviteToken(),
-        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        token,
+        status: StaffInvitationStatus.pending,
+        declineReason: null,
+        respondedAt: null,
+        emailStatus: EmailDeliveryStatus.queued,
+        emailError: null,
+        expiresAt,
       },
     });
     await this.auditService.record({
@@ -889,7 +936,29 @@ export class ClinicsService {
       targetId: inv.id,
       metadata: { email: inv.email, role: inv.role },
     });
-    return updated;
+
+    const inviterName =
+      `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+    const delivery = await this.notifications.sendRoleInvitationEmail({
+      invitationId: updated.id,
+      clinicId: tenant.clinicId,
+      recipientEmail: updated.email,
+      role: updated.role,
+      scopeName: tenant.clinic.name,
+      accentHex: tenant.clinic.primaryColorHex,
+      inviterName,
+      inviterNote: updated.inviterNote,
+      token,
+      expiresAt,
+    });
+
+    return {
+      ...updated,
+      clinicName: tenant.clinic.name,
+      inviterName,
+      emailStatus: delivery.emailStatus,
+      emailError: delivery.emailError,
+    };
   }
 
   async revokeStaffInvitation(

@@ -25,6 +25,68 @@ export class EmailTransportService {
 
   constructor(private readonly configService: ConfigService<AppEnv, true>) {}
 
+  private async sendViaResend(
+    apiKey: string,
+    from: string,
+    input: SendRawEmailInput
+  ): Promise<EmailDispatchResult> {
+    try {
+      const resend = new Resend(apiKey);
+      const { data, error } = await resend.emails.send({
+        from,
+        to: input.to,
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+      });
+      if (error) {
+        this.logger.warn(`Resend delivery rejected (${input.to}): ${error.message}`);
+        return { sent: false, provider: "resend", reason: error.message };
+      }
+      return { sent: true, provider: "resend", id: data?.id ?? null };
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : "Resend delivery failed";
+      this.logger.warn(`Resend delivery failed (${input.to}): ${reason}`);
+      return { sent: false, provider: "resend", reason };
+    }
+  }
+
+  private async sendViaGmail(
+    gmailUser: string,
+    gmailPass: string,
+    input: SendRawEmailInput
+  ): Promise<EmailDispatchResult> {
+    const displayName = (
+      input.fromName?.trim() ||
+      this.configService.get("GMAIL_FROM_NAME", { infer: true }).trim() ||
+      "Smile Dental"
+    ).replace(/[\r\n"]/g, "");
+
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user: gmailUser, pass: gmailPass },
+    });
+
+    try {
+      const info = await transporter.sendMail({
+        from: `"${displayName}" <${gmailUser}>`,
+        to: input.to,
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+      });
+      return { sent: true, provider: "gmail_smtp", id: info.messageId ?? null };
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : "Gmail SMTP delivery failed";
+      this.logger.warn(`Gmail SMTP delivery failed (${input.to}): ${reason}`);
+      return { sent: false, provider: "gmail_smtp", reason };
+    }
+  }
+
   async send(input: SendRawEmailInput): Promise<EmailDispatchResult> {
     const resendApiKey = this.configService
       .get("RESEND_API_KEY", { infer: true })
@@ -32,31 +94,6 @@ export class EmailTransportService {
     const resendFrom = this.configService
       .get("RESEND_FROM_EMAIL", { infer: true })
       .trim();
-
-    if (resendApiKey) {
-      try {
-        const resend = new Resend(resendApiKey);
-        const { data, error } = await resend.emails.send({
-          from: resendFrom,
-          to: input.to,
-          subject: input.subject,
-          html: input.html,
-          text: input.text,
-        });
-        if (error) {
-          return { sent: false, provider: "resend", reason: error.message };
-        }
-        return { sent: true, provider: "resend", id: data?.id ?? null };
-      } catch (error) {
-        return {
-          sent: false,
-          provider: "resend",
-          reason:
-            error instanceof Error ? error.message : "Resend delivery failed",
-        };
-      }
-    }
-
     const gmailUser = this.configService
       .get("GMAIL_USER", { infer: true })
       ?.trim();
@@ -64,42 +101,34 @@ export class EmailTransportService {
       .get("GMAIL_APP_PASSWORD", { infer: true })
       ?.replace(/\s+/g, "");
 
-    if (gmailUser && gmailPass) {
-      const displayName = (
-        input.fromName?.trim() ||
-        this.configService.get("GMAIL_FROM_NAME", { infer: true }).trim() ||
-        "Smile Dental"
-      ).replace(/[\r\n"]/g, "");
+    const hasResend = Boolean(resendApiKey);
+    const hasGmail = Boolean(gmailUser && gmailPass);
+    const isResendSandbox = /@resend\.dev\b/i.test(resendFrom);
 
-      const transporter = nodemailer.createTransport({
-        host: "smtp.gmail.com",
-        port: 465,
-        secure: true,
-        auth: { user: gmailUser, pass: gmailPass },
-      });
-
-      try {
-        const info = await transporter.sendMail({
-          from: `"${displayName}" <${gmailUser}>`,
-          to: input.to,
-          subject: input.subject,
-          html: input.html,
-          text: input.text,
-        });
-        return { sent: true, provider: "gmail_smtp", id: info.messageId ?? null };
-      } catch (error) {
-        this.logger.warn(
-          `Gmail SMTP delivery failed: ${
-            error instanceof Error ? error.message : "unknown"
-          }`
-        );
-        return {
-          sent: false,
-          provider: "gmail_smtp",
-          reason:
-            error instanceof Error ? error.message : "Gmail SMTP delivery failed",
-        };
+    // Prefer Gmail SMTP over Resend's sandbox sender (onboarding@resend.dev only allows
+    // sending to the Resend account owner, whereas Gmail SMTP delivers to any recipient).
+    if (hasGmail && (!hasResend || isResendSandbox)) {
+      const gmailResult = await this.sendViaGmail(gmailUser!, gmailPass!, input);
+      if (gmailResult.sent || !hasResend) {
+        return gmailResult;
       }
+      return this.sendViaResend(resendApiKey!, resendFrom, input);
+    }
+
+    if (hasResend) {
+      const resendResult = await this.sendViaResend(
+        resendApiKey!,
+        resendFrom,
+        input
+      );
+      if (resendResult.sent || !hasGmail) {
+        return resendResult;
+      }
+      return this.sendViaGmail(gmailUser!, gmailPass!, input);
+    }
+
+    if (hasGmail) {
+      return this.sendViaGmail(gmailUser!, gmailPass!, input);
     }
 
     return { sent: false, reason: "EMAIL_PROVIDER_NOT_CONFIGURED" };

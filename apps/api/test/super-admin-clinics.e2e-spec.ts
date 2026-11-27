@@ -99,6 +99,10 @@ describe("Phase 3: Super Admin, Billing, Quotas & Clinic Suspension (e2e)", () =
         }
       ),
       findMany: jest.fn(async () => [{ ...clinicRecord, plan: starterPlan }]),
+      aggregate: jest.fn(async () => ({
+        _sum: { currentMonthEmailCount: 0, storageUsedBytes: BigInt(0) },
+        _count: { id: 1 },
+      })),
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
         clinicRecord = {
           id: CLINIC_ID,
