@@ -1,6 +1,15 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, SubscriptionPlanCode } from "@prisma/client";
 import { Pool } from "pg";
+
+const envPath = resolve(__dirname, "../.env");
+if (!process.env.DATABASE_URL && !process.env.DIRECT_URL && existsSync(envPath)) {
+  if (typeof process.loadEnvFile === "function") {
+    process.loadEnvFile(envPath);
+  }
+}
 
 const MB = BigInt(1024 * 1024);
 
