@@ -80,6 +80,21 @@ export function useClinicAdminContext(): ClinicAdminContextValue {
   return useContext(ClinicAdminContext);
 }
 
+function useViewAsClinicId(): Id<"clinics"> | undefined {
+  const searchParams = useSearchParams();
+  const viewAs = searchParams.get("viewAsClinicId")?.trim() || undefined;
+  return viewAs as Id<"clinics"> | undefined;
+}
+
+function buildClinicHref(
+  path: string,
+  overrideClinicId?: Id<"clinics">
+): string {
+  return overrideClinicId
+    ? `${path}?viewAsClinicId=${encodeURIComponent(overrideClinicId)}`
+    : path;
+}
+
 function NavLinks({
   pathname,
   buildHref,
@@ -90,7 +105,10 @@ function NavLinks({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="flex flex-col gap-1 px-3 py-2" aria-label="Clinic Admin navigation">
+    <nav
+      className="flex flex-col gap-1 px-3 py-2"
+      aria-label="Clinic Admin navigation"
+    >
       {NAV_ITEMS.map((item) => {
         const isActive =
           "exact" in item && item.exact
@@ -118,295 +136,42 @@ function NavLinks({
   );
 }
 
-export function ClinicAdminEnvGate({ children }: { children: ReactNode }) {
-  const { isConfigured } = useEnvConfig();
-
-  if (!isConfigured) {
-    return (
-      <Alert className="max-w-2xl">
-        <ShieldCheck className="size-4" />
-        <AlertTitle>Connect Clerk & Smile API to activate Clinic Admin</AlertTitle>
-        <AlertDescription>
-          Populate <code>NEXT_PUBLIC_API_URL</code>,{" "}
-          <code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>, and{" "}
-          <code>CLERK_SECRET_KEY</code> in <code>.env.local</code>, then run{" "}
-          <code>npm run dev:api</code> to manage your clinic&apos;s dentists,
-          operatory chairs, dental services, and operating hours.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  return <>{children}</>;
-}
-
-function ConnectedShellInner({
-  children,
-  overrideClinicId,
-}: {
-  children: ReactNode;
-  overrideClinicId: Id<"clinics"> | undefined;
-}) {
-  const pathname = usePathname();
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  const workspace = useQuery(api.clinicAdmin.getClinicWorkspace, {
-    overrideClinicId,
-  });
-
-  const buildHref = (path: string) =>
-    overrideClinicId
-      ? `${path}?viewAsClinicId=${encodeURIComponent(overrideClinicId)}`
-      : path;
-
-  const isReadOnly = workspace?.isReadOnly ?? false;
-  const readOnlyReason = workspace?.readOnlyReason ?? null;
-  const isSuperAdminOverride = workspace?.isSuperAdminOverride ?? false;
-
-  return (
-    <ClinicAdminContext.Provider
-      value={{
-        overrideClinicId,
-        isReadOnly,
-        readOnlyReason,
-        isSuperAdminOverride,
-        buildHref,
-      }}
-    >
-      <div className="flex min-h-screen flex-1 bg-background">
-        {/* Desktop Sidebar */}
-        <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar lg:flex">
-          <div className="flex h-14 items-center justify-between border-b px-4">
-            <Link
-              href={buildHref("/admin")}
-              className="flex min-w-0 items-center gap-2 font-semibold tracking-tight"
-            >
-              <span
-                className="flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white"
-                style={{
-                  backgroundColor:
-                    workspace?.clinic.primaryColorHex ?? "#0284c7",
-                }}
-              >
-                {(workspace?.clinic.name ?? "S").slice(0, 1).toUpperCase()}
-              </span>
-              <span className="truncate">
-                {workspace?.clinic.name ?? "Clinic Admin"}
-              </span>
-            </Link>
-          </div>
-
-          <div className="flex-1 overflow-y-auto py-3">
-            <NavLinks pathname={pathname} buildHref={buildHref} />
-          </div>
-
-          <div className="border-t p-3 text-xs text-muted-foreground">
-            {workspace?.plan ? (
-              <Link
-                href={buildHref("/admin/billing")}
-                className="block space-y-1 rounded-md p-1.5 transition-colors hover:bg-sidebar-accent/60"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-foreground">
-                    {workspace.plan.name}
-                  </span>
-                  <ClinicStatusBadge status={workspace.clinic.status} />
-                </div>
-                <p>
-                  Renews {formatDate(workspace.clinic.subscriptionEndsAt)}
-                </p>
-              </Link>
-            ) : (
-              <p>Clinic Setup Portal</p>
-            )}
-          </div>
-        </aside>
-
-        {/* Main Column */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          {/* Super Admin Read-Only Banner */}
-          {isSuperAdminOverride ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-500/30 bg-sky-500/10 px-4 py-2 text-xs text-sky-900 dark:text-sky-200 lg:px-6">
-              <div className="flex items-center gap-2">
-                <Eye className="size-4 shrink-0" />
-                <span>
-                  <strong>Super Admin View-As-Clinic (Read-Only):</strong>{" "}
-                  Inspecting{" "}
-                  <span className="font-semibold">
-                    {workspace?.clinic.name ?? "tenant"}
-                  </span>
-                  . All write actions are disabled.
-                </span>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                render={<Link href="/super-admin/clinics" />}
-              >
-                <ArrowLeft className="mr-1 size-3.5" />
-                Back to Super Admin
-              </Button>
-            </div>
-          ) : null}
-
-          {/* Past Due Renewal Banner (Law #4 — inside grace period) */}
-          {workspace?.clinic.status === "past_due" && !isReadOnly ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200 lg:px-6">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="size-4 shrink-0" />
-                <span>
-                  <strong>Subscription Past Due:</strong> Your clinic is in its
-                  3-day grace period
-                  {workspace.clinic.gracePeriodEndsAt
-                    ? ` (ends ${formatDate(workspace.clinic.gracePeriodEndsAt)})`
-                    : ""}
-                  . Renew now to avoid automatic Read-Only suspension.
-                </span>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                render={<Link href={buildHref("/admin/billing")} />}
-              >
-                View Billing
-              </Button>
-            </div>
-          ) : null}
-
-          {/* Suspended, Archived, Expired Trial, Expired Active, or Grace-Expired Read-Only Banner (Law #4) */}
-          {workspace && isReadOnly && !isSuperAdminOverride ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs text-rose-900 dark:text-rose-200 lg:px-6">
-              <div className="flex items-center gap-2">
-                <ShieldAlert className="size-4 shrink-0" />
-                <span>
-                  <strong>Read-Only Mode ({workspace.clinic.status.replace("_", " ")}):</strong>{" "}
-                  {readOnlyReason ??
-                    "Existing records remain accessible, while editing and public bookings are paused until renewal."}{" "}
-                  (<code>/c/{workspace.clinic.slug}</code> paused)
-                </span>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                render={<Link href={buildHref("/admin/billing")} />}
-              >
-                View Billing &amp; Invoices
-              </Button>
-            </div>
-          ) : null}
-
-          <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:px-6">
-            <div className="flex items-center gap-3">
-              <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-                <SheetTrigger
-                  render={
-                    <Button
-                      variant="outline"
-                      size="icon-sm"
-                      className="lg:hidden"
-                      aria-label="Open menu"
-                    />
-                  }
-                >
-                  <Menu className="size-4" />
-                </SheetTrigger>
-                <SheetContent side="left" className="w-64 p-0">
-                  <SheetHeader className="border-b px-4 py-3">
-                    <SheetTitle>
-                      {workspace?.clinic.name ?? "Clinic Admin"}
-                    </SheetTitle>
-                  </SheetHeader>
-                  <NavLinks
-                    pathname={pathname}
-                    buildHref={buildHref}
-                    onNavigate={() => setMobileOpen(false)}
-                  />
-                </SheetContent>
-              </Sheet>
-              <span className="text-sm font-semibold tracking-tight">
-                Clinic Administration
-              </span>
-            </div>
-
-            <div className="flex items-center gap-3">
-              {workspace?.user ? (
-                <div className="hidden text-right sm:block">
-                  <p className="text-xs font-medium leading-tight">
-                    {`${workspace.user.firstName} ${workspace.user.lastName}`.trim() ||
-                      workspace.user.email}
-                  </p>
-                  <p className="text-[11px] capitalize text-muted-foreground">
-                    {workspace.user.role.replace("_", " ")}
-                  </p>
-                </div>
-              ) : null}
-              <UserButton />
-            </div>
-          </header>
-
-          <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-4 lg:p-6">
-            {/* Active System Announcements */}
-            {workspace?.announcements && workspace.announcements.length > 0 ? (
-              <div className="space-y-2">
-                {workspace.announcements.slice(0, 2).map((ann) => (
-                  <Alert
-                    key={ann._id}
-                    variant={
-                      ann.severity === "critical" ? "destructive" : "default"
-                    }
-                  >
-                    <Megaphone className="size-4" />
-                    <AlertTitle>{ann.title}</AlertTitle>
-                    <AlertDescription>{ann.message}</AlertDescription>
-                  </Alert>
-                ))}
-              </div>
-            ) : null}
-
-            {children}
-          </main>
-        </div>
-      </div>
-    </ClinicAdminContext.Provider>
+function useActiveWorkspace(overrideClinicId?: Id<"clinics">) {
+  const { isAuthenticated } = useApiAuth();
+  const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
+  const canQueryWorkspace = Boolean(
+    isAuthenticated &&
+      user?.isActive &&
+      ((user.role === "clinic_admin" && Boolean(user.clinicId)) ||
+        (user.role === "super_admin" && Boolean(overrideClinicId)))
+  );
+  return useQuery(
+    api.clinicAdmin.getClinicWorkspace,
+    canQueryWorkspace ? { overrideClinicId } : "skip"
   );
 }
 
-function UnconfiguredShell({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
+function ClinicAdminPageSkeleton() {
   return (
-    <div className="flex min-h-screen flex-1 bg-background">
-      <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar lg:flex">
-        <div className="flex h-14 items-center justify-between border-b px-4">
-          <span className="font-semibold tracking-tight">Clinic Admin</span>
-          <Badge variant="outline">Setup</Badge>
-        </div>
-        <div className="flex-1 py-3">
-          <NavLinks pathname={pathname} buildHref={(p) => p} />
-        </div>
-      </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b px-6">
-          <span className="text-sm font-semibold">Clinic Administration</span>
-          <Badge variant="outline">Setup Mode</Badge>
-        </header>
-        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-6">
-          {children}
-        </main>
+    <div className="space-y-5 py-1">
+      <div className="space-y-2">
+        <div className="h-7 w-56 animate-pulse rounded-lg bg-muted" />
+        <div className="h-4 w-80 animate-pulse rounded bg-muted" />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-28 animate-pulse rounded-xl border bg-muted/40"
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-function ClinicAdminAuthGuard({
-  children,
-  overrideClinicId,
-}: {
-  children: ReactNode;
-  overrideClinicId: Id<"clinics"> | undefined;
-}) {
+function ClinicAdminPageGuard({ children }: { children: ReactNode }) {
+  const overrideClinicId = useViewAsClinicId();
   const { isAuthenticated, isLoading: authLoading } = useApiAuth();
   const ensureUser = useMutation(api.users.ensureCurrentUser);
   const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
@@ -433,12 +198,19 @@ function ClinicAdminAuthGuard({
     };
   }, [isAuthenticated, user, ensureUser]);
 
+  const canAccessAdmin = Boolean(
+    user?.isActive &&
+      ((user.role === "clinic_admin" && Boolean(user.clinicId)) ||
+        (user.role === "super_admin" && Boolean(overrideClinicId)))
+  );
+
+  const workspace = useQuery(
+    api.clinicAdmin.getClinicWorkspace,
+    isAuthenticated && canAccessAdmin ? { overrideClinicId } : "skip"
+  );
+
   if (authLoading || (isAuthenticated && user === undefined)) {
-    return (
-      <div className="flex min-h-screen flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
-        Loading clinic workspace…
-      </div>
-    );
+    return <ClinicAdminPageSkeleton />;
   }
 
   if (!isAuthenticated) {
@@ -474,7 +246,7 @@ function ClinicAdminAuthGuard({
     }
 
     return (
-      <div className="flex min-h-screen flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+      <div className="flex min-h-[260px] flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
         <div className="size-7 animate-spin rounded-full border-2 border-muted border-t-primary" />
         <p className="text-sm text-muted-foreground">
           Syncing your clinic account…
@@ -508,10 +280,6 @@ function ClinicAdminAuthGuard({
     );
   }
 
-  const canAccessAdmin =
-    (user.role === "clinic_admin" && Boolean(user.clinicId)) ||
-    (user.role === "super_admin" && Boolean(overrideClinicId));
-
   if (!canAccessAdmin) {
     return (
       <div className="mx-auto my-12 max-w-md px-4">
@@ -525,7 +293,10 @@ function ClinicAdminAuthGuard({
               <strong className="capitalize">
                 {user.role.replace("_", " ")}
               </strong>{" "}
-              role{user.role === "clinic_admin" && !user.clinicId ? " without an assigned clinic" : ""}{" "}
+              role
+              {user.role === "clinic_admin" && !user.clinicId
+                ? " without an assigned clinic"
+                : ""}{" "}
               and cannot open <code>/admin</code>.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -542,34 +313,402 @@ function ClinicAdminAuthGuard({
     );
   }
 
+  const buildHref = (path: string) => buildClinicHref(path, overrideClinicId);
+
   return (
-    <ConnectedShellInner overrideClinicId={overrideClinicId}>
+    <ClinicAdminContext.Provider
+      value={{
+        overrideClinicId,
+        isReadOnly: workspace?.isReadOnly ?? false,
+        readOnlyReason: workspace?.readOnlyReason ?? null,
+        isSuperAdminOverride: workspace?.isSuperAdminOverride ?? false,
+        buildHref,
+      }}
+    >
+      {workspace?.announcements && workspace.announcements.length > 0 ? (
+        <div className="space-y-2">
+          {workspace.announcements.slice(0, 2).map((ann) => (
+            <Alert
+              key={ann._id}
+              variant={ann.severity === "critical" ? "destructive" : "default"}
+            >
+              <Megaphone className="size-4" />
+              <AlertTitle>{ann.title}</AlertTitle>
+              <AlertDescription>{ann.message}</AlertDescription>
+            </Alert>
+          ))}
+        </div>
+      ) : null}
       {children}
-    </ConnectedShellInner>
+    </ClinicAdminContext.Provider>
   );
 }
 
-function SearchParamsShellResolver({ children }: { children: ReactNode }) {
+export function ClinicAdminEnvGate({ children }: { children: ReactNode }) {
   const { isConfigured } = useEnvConfig();
-  const searchParams = useSearchParams();
-  const viewAs = searchParams.get("viewAsClinicId")?.trim() || undefined;
-  const overrideClinicId = viewAs as Id<"clinics"> | undefined;
 
   if (!isConfigured) {
-    return <UnconfiguredShell>{children}</UnconfiguredShell>;
+    return (
+      <Alert className="max-w-2xl">
+        <ShieldCheck className="size-4" />
+        <AlertTitle>Connect Clerk &amp; Smile API to activate Clinic Admin</AlertTitle>
+        <AlertDescription>
+          Populate <code>NEXT_PUBLIC_API_URL</code>,{" "}
+          <code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>, and{" "}
+          <code>CLERK_SECRET_KEY</code> in <code>.env.local</code>, then run{" "}
+          <code>npm run dev:api</code> to manage your clinic&apos;s dentists,
+          operatory chairs, dental services, and operating hours.
+        </AlertDescription>
+      </Alert>
+    );
   }
 
   return (
-    <ClinicAdminAuthGuard overrideClinicId={overrideClinicId}>
-      {children}
-    </ClinicAdminAuthGuard>
+    <Suspense fallback={<ClinicAdminPageSkeleton />}>
+      <ClinicAdminPageGuard>{children}</ClinicAdminPageGuard>
+    </Suspense>
+  );
+}
+
+function SidebarChromeContent({ pathname }: { pathname: string }) {
+  const overrideClinicId = useViewAsClinicId();
+  const workspace = useActiveWorkspace(overrideClinicId);
+  const buildHref = (path: string) => buildClinicHref(path, overrideClinicId);
+
+  return (
+    <>
+      <div className="flex h-14 items-center justify-between border-b px-4">
+        <Link
+          href={buildHref("/admin")}
+          className="flex min-w-0 items-center gap-2 font-semibold tracking-tight"
+        >
+          <span
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white"
+            style={{
+              backgroundColor: workspace?.clinic.primaryColorHex ?? "#0284c7",
+            }}
+          >
+            {(workspace?.clinic.name ?? "S").slice(0, 1).toUpperCase()}
+          </span>
+          <span className="truncate">
+            {workspace?.clinic.name ?? "Clinic Admin"}
+          </span>
+        </Link>
+      </div>
+
+      <div className="flex-1 overflow-y-auto py-3">
+        <NavLinks pathname={pathname} buildHref={buildHref} />
+      </div>
+
+      <div className="border-t p-3 text-xs text-muted-foreground">
+        {workspace?.plan ? (
+          <Link
+            href={buildHref("/admin/billing")}
+            className="block space-y-1 rounded-md p-1.5 transition-colors hover:bg-sidebar-accent/60"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-foreground">
+                {workspace.plan.name}
+              </span>
+              <ClinicStatusBadge status={workspace.clinic.status} />
+            </div>
+            <p>Renews {formatDate(workspace.clinic.subscriptionEndsAt)}</p>
+          </Link>
+        ) : (
+          <p>Clinic Setup Portal</p>
+        )}
+      </div>
+    </>
+  );
+}
+
+function SidebarChromeFallback({ pathname }: { pathname: string }) {
+  return (
+    <>
+      <div className="flex h-14 items-center justify-between border-b px-4">
+        <Link
+          href="/admin"
+          className="flex min-w-0 items-center gap-2 font-semibold tracking-tight"
+        >
+          <span
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white"
+            style={{ backgroundColor: "#0284c7" }}
+          >
+            S
+          </span>
+          <span className="truncate">Clinic Admin</span>
+        </Link>
+      </div>
+      <div className="flex-1 overflow-y-auto py-3">
+        <NavLinks pathname={pathname} buildHref={(p) => p} />
+      </div>
+      <div className="border-t p-3 text-xs text-muted-foreground">
+        <p>Clinic Setup Portal</p>
+      </div>
+    </>
+  );
+}
+
+function TopStatusBanners() {
+  const overrideClinicId = useViewAsClinicId();
+  const workspace = useActiveWorkspace(overrideClinicId);
+  if (!workspace) return null;
+
+  const buildHref = (path: string) => buildClinicHref(path, overrideClinicId);
+  const { isReadOnly, readOnlyReason, isSuperAdminOverride } = workspace;
+
+  return (
+    <>
+      {/* Super Admin Read-Only Banner */}
+      {isSuperAdminOverride ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-500/30 bg-sky-500/10 px-4 py-2 text-xs text-sky-900 dark:text-sky-200 lg:px-6">
+          <div className="flex items-center gap-2">
+            <Eye className="size-4 shrink-0" />
+            <span>
+              <strong>Super Admin View-As-Clinic (Read-Only):</strong>{" "}
+              Inspecting{" "}
+              <span className="font-semibold">{workspace.clinic.name}</span>.
+              All write actions are disabled.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            render={<Link href="/super-admin/clinics" />}
+          >
+            <ArrowLeft className="mr-1 size-3.5" />
+            Back to Super Admin
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Past Due Renewal Banner (Law #4 — inside grace period) */}
+      {workspace.clinic.status === "past_due" && !isReadOnly ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200 lg:px-6">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="size-4 shrink-0" />
+            <span>
+              <strong>Subscription Past Due:</strong> Your clinic is in its
+              3-day grace period
+              {workspace.clinic.gracePeriodEndsAt
+                ? ` (ends ${formatDate(workspace.clinic.gracePeriodEndsAt)})`
+                : ""}
+              . Renew now to avoid automatic Read-Only suspension.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            render={<Link href={buildHref("/admin/billing")} />}
+          >
+            View Billing
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Suspended, Archived, Expired Trial, Expired Active, or Grace-Expired Read-Only Banner (Law #4) */}
+      {isReadOnly && !isSuperAdminOverride ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs text-rose-900 dark:text-rose-200 lg:px-6">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="size-4 shrink-0" />
+            <span>
+              <strong>
+                Read-Only Mode ({workspace.clinic.status.replace("_", " ")}):
+              </strong>{" "}
+              {readOnlyReason ??
+                "Existing records remain accessible, while editing and public bookings are paused until renewal."}{" "}
+              (<code>/c/{workspace.clinic.slug}</code> paused)
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            render={<Link href={buildHref("/admin/billing")} />}
+          >
+            View Billing &amp; Invoices
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function MobileDrawerNav({
+  pathname,
+  onNavigate,
+}: {
+  pathname: string;
+  onNavigate: () => void;
+}) {
+  const overrideClinicId = useViewAsClinicId();
+  const workspace = useActiveWorkspace(overrideClinicId);
+  const buildHref = (path: string) => buildClinicHref(path, overrideClinicId);
+
+  return (
+    <>
+      <SheetHeader className="border-b px-4 py-3">
+        <SheetTitle>{workspace?.clinic.name ?? "Clinic Admin"}</SheetTitle>
+      </SheetHeader>
+      <NavLinks
+        pathname={pathname}
+        buildHref={buildHref}
+        onNavigate={onNavigate}
+      />
+    </>
+  );
+}
+
+function ConnectedHeaderIdentity() {
+  const { isAuthenticated } = useApiAuth();
+  const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
+
+  return (
+    <div className="flex items-center gap-3">
+      {user?.isActive ? (
+        <div className="hidden text-right sm:block">
+          <p className="text-xs font-medium leading-tight">
+            {`${user.firstName} ${user.lastName}`.trim() || user.email}
+          </p>
+          <p className="text-[11px] capitalize text-muted-foreground">
+            {user.role.replace("_", " ")}
+          </p>
+        </div>
+      ) : null}
+      <UserButton />
+    </div>
+  );
+}
+
+function ConnectedClinicAdminDeactivatedGate({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const { isAuthenticated } = useApiAuth();
+  const user = useQuery(api.users.current, isAuthenticated ? {} : "skip");
+
+  if (user && !user.isActive) {
+    return <AccountDeactivatedCard />;
+  }
+
+  return <>{children}</>;
+}
+
+function ClinicAdminShellLayout({
+  children,
+  isConfigured,
+}: {
+  children: ReactNode;
+  isConfigured: boolean;
+}) {
+  const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <div className="flex min-h-screen flex-1 bg-background">
+      {/* Desktop Sidebar */}
+      <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar lg:flex">
+        {isConfigured ? (
+          <Suspense fallback={<SidebarChromeFallback pathname={pathname} />}>
+            <SidebarChromeContent pathname={pathname} />
+          </Suspense>
+        ) : (
+          <>
+            <div className="flex h-14 items-center justify-between border-b px-4">
+              <span className="font-semibold tracking-tight">Clinic Admin</span>
+              <Badge variant="outline">Setup</Badge>
+            </div>
+            <div className="flex-1 py-3">
+              <NavLinks pathname={pathname} buildHref={(p) => p} />
+            </div>
+          </>
+        )}
+      </aside>
+
+      {/* Main Column */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {isConfigured ? (
+          <Suspense fallback={null}>
+            <TopStatusBanners />
+          </Suspense>
+        ) : null}
+
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:px-6">
+          <div className="flex items-center gap-3">
+            <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+              <SheetTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    className="lg:hidden"
+                    aria-label="Open menu"
+                  />
+                }
+              >
+                <Menu className="size-4" />
+              </SheetTrigger>
+              <SheetContent side="left" className="w-64 p-0">
+                <Suspense
+                  fallback={
+                    <>
+                      <SheetHeader className="border-b px-4 py-3">
+                        <SheetTitle>Clinic Admin</SheetTitle>
+                      </SheetHeader>
+                      <NavLinks
+                        pathname={pathname}
+                        buildHref={(p) => p}
+                        onNavigate={() => setMobileOpen(false)}
+                      />
+                    </>
+                  }
+                >
+                  <MobileDrawerNav
+                    pathname={pathname}
+                    onNavigate={() => setMobileOpen(false)}
+                  />
+                </Suspense>
+              </SheetContent>
+            </Sheet>
+            <span className="text-sm font-semibold tracking-tight">
+              Clinic Administration
+            </span>
+          </div>
+
+          {isConfigured ? (
+            <ConnectedHeaderIdentity />
+          ) : (
+            <Badge variant="outline">Setup Mode</Badge>
+          )}
+        </header>
+
+        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-4 lg:p-6">
+          {children}
+        </main>
+      </div>
+    </div>
   );
 }
 
 export function ClinicAdminShell({ children }: { children: ReactNode }) {
+  const { isConfigured } = useEnvConfig();
+
+  if (isConfigured) {
+    return (
+      <ConnectedClinicAdminDeactivatedGate>
+        <ClinicAdminShellLayout isConfigured={true}>
+          {children}
+        </ClinicAdminShellLayout>
+      </ConnectedClinicAdminDeactivatedGate>
+    );
+  }
+
   return (
-    <Suspense fallback={<div className="flex flex-1 p-6 text-sm text-muted-foreground">Loading clinic workspace…</div>}>
-      <SearchParamsShellResolver>{children}</SearchParamsShellResolver>
-    </Suspense>
+    <ClinicAdminShellLayout isConfigured={false}>
+      {children}
+    </ClinicAdminShellLayout>
   );
 }
