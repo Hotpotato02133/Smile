@@ -552,6 +552,8 @@ export interface PatientChartData {
 }
 
 export interface ClinicDetailData extends ClinicDoc {
+  clinic: ClinicDoc;
+  staffCount: number;
   plan?: SubscriptionPlanDoc;
   payments: PaymentDoc[];
   users: UserDoc[];

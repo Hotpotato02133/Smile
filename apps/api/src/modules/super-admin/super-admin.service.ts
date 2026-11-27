@@ -172,8 +172,11 @@ export class SuperAdminService {
       actorEmail: log.actorUser.email,
     }));
 
+    const serializedClinic = serializeClinic(clinic);
     return {
-      ...serializeClinic(clinic),
+      ...serializedClinic,
+      clinic: serializedClinic,
+      staffCount: clinic.users.length,
       pendingInvitations: clinic.invitations,
       recentAuditLogs,
       payments: clinic.payments.map((p) => ({
@@ -427,7 +430,10 @@ export class SuperAdminService {
         tx
       );
 
-      return serializeClinic(updated);
+      return {
+        ...serializeClinic(updated),
+        isSubscriptionExpired: updated.subscriptionEndsAt.getTime() < nowMs,
+      };
     });
   }
 

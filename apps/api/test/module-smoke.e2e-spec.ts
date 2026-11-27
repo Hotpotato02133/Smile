@@ -542,6 +542,8 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
       .get(`/api/v1/super-admin/clinics/${CLINIC_ID}`)
       .set("Authorization", "Bearer root-token")
       .expect(200);
+    expect(detailRes.body.clinic.planId).toBe(PLAN_ID);
+    expect(detailRes.body.staffCount).toBe(2);
     expect(Array.isArray(detailRes.body.pendingInvitations)).toBe(true);
     expect(detailRes.body.recentAuditLogs[0].actorName).toBe("Root Owner");
 
