@@ -463,6 +463,8 @@ export interface FrontDeskWorkspaceData {
 export interface DentistQueueData {
   dateKey: string;
   selectedDentistId: string | null;
+  hasLinkedDentistProfile: boolean;
+  canSwitchDentist: boolean;
   dentists: Array<DentistDoc & AnyRecord>;
   appointments: AppointmentItem[];
   queue: AppointmentItem[];

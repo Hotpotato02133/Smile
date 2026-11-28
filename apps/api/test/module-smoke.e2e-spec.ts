@@ -664,6 +664,8 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
       .expect(200);
     expect(queueRes.body.clinic.slug).toBe("makati-smile");
     expect(queueRes.body.user.role).toBe("dentist");
+    expect(queueRes.body.hasLinkedDentistProfile).toBe(true);
+    expect(queueRes.body.canSwitchDentist).toBe(false);
     expect(queueRes.body.queue[0].patientName).toBe("Juan Dela Cruz");
     expect(queueRes.body.queue[0].chairRoomCode).toBe("RM-01");
   });

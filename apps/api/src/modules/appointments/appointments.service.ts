@@ -485,8 +485,12 @@ export class AppointmentsService {
     ]);
 
     const ownDentist = dentists.find((d) => d.userId === actor.id);
-    const selectedDentistId =
-      params.dentistId ?? ownDentist?.id ?? dentists[0]?.id ?? null;
+    const hasLinkedDentistProfile = Boolean(ownDentist);
+    const canSwitchDentist =
+      actor.role === "clinic_admin" || tenant.isSuperAdminOverride;
+    const selectedDentistId = canSwitchDentist
+      ? (params.dentistId ?? ownDentist?.id ?? dentists[0]?.id ?? null)
+      : (ownDentist?.id ?? null);
 
     const appointmentsRaw = selectedDentistId
       ? await this.prisma.appointment.findMany({
@@ -536,6 +540,8 @@ export class AppointmentsService {
         email: actor.email,
       },
       selectedDentistId,
+      hasLinkedDentistProfile,
+      canSwitchDentist,
       dentists,
       appointments,
       queue: appointments,
