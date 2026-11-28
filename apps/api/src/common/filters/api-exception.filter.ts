@@ -4,12 +4,15 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from "@nestjs/common";
 import { API_ERROR_CODES, type ApiErrorResponse } from "@smile/shared";
 import type { Request, Response } from "express";
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(ApiExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -44,6 +47,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
       } else {
         code = this.mapStatusToCode(statusCode);
       }
+    } else {
+      const errMessage =
+        exception instanceof Error ? exception.message : String(exception);
+      const errStack = exception instanceof Error ? exception.stack : undefined;
+      this.logger.error(
+        `Unhandled 500 on ${request.method} ${request.url}: ${errMessage}`,
+        errStack
+      );
     }
 
     const payload: ApiErrorResponse = {

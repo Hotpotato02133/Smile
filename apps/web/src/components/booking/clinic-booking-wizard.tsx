@@ -1,7 +1,7 @@
 "use client";
 
 import { SignInButton } from "@clerk/nextjs";
-import { useApiAuth, useMutation, useQuery } from "@/lib/api";
+import { useApiAuth, useMutation, useQuery, useRealtime } from "@/lib/api";
 import {
   ArrowLeft,
   BellRing,
@@ -233,7 +233,14 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
     null
   );
 
-  // Sync Clerk user to Convex only when authenticated and not yet provisioned
+  const { subscribePublicClinic } = useRealtime();
+  useEffect(() => {
+    if (clinicSlug) {
+      subscribePublicClinic(clinicSlug);
+    }
+  }, [clinicSlug, subscribePublicClinic]);
+
+  // Sync Clerk user to backend only when authenticated and not yet provisioned
   useEffect(() => {
     if (isAuthenticated && currentUser === null) {
       void ensureUser().catch(() => {});
@@ -347,6 +354,7 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
       try {
         const result = await claimWaitlistSlot({
           waitlistId: activeClaimEntry._id,
+          dateKey,
           startTimeUtc: slot.startTimeUtc,
           dentistId: slot.dentistId,
           chairId: slot.chairId,
@@ -400,10 +408,15 @@ function ConnectedBookingWizard({ clinicSlug }: { clinicSlug: string }) {
   };
 
   const handleReleaseAndGoBackToSlots = async () => {
+    const releaseDateKey = heldSlot?.dateKey ?? dateKey;
     setHeldSlot(null);
     setStep(2);
     try {
-      await releaseSessionLock({ clinicId: clinic._id, sessionId });
+      await releaseSessionLock({
+        clinicId: clinic._id,
+        dateKey: releaseDateKey,
+        sessionId,
+      });
     } catch {
       // Lock auto-releases on TTL even if release fails
     }

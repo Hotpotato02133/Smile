@@ -121,10 +121,11 @@ export class ClinicsController {
   @ApiOperation({ summary: "Update dentist profile or weekly schedule" })
   updateDentist(
     @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
     @Param("id") id: string,
     @Body(new ZodValidationPipe(updateDentistSchema)) dto: UpdateDentistDto
   ) {
-    return this.clinicsService.updateDentist(tenant, id, dto);
+    return this.clinicsService.updateDentist(tenant, actor, id, dto);
   }
 
   @Patch("dentists/:id/toggle")
@@ -158,9 +159,10 @@ export class ClinicsController {
   @ApiOperation({ summary: "Remove a dentist time-off block" })
   deleteTimeOff(
     @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
     @Param("timeOffId") timeOffId: string
   ) {
-    return this.clinicsService.deleteDentistTimeOff(tenant, timeOffId);
+    return this.clinicsService.deleteDentistTimeOff(tenant, actor, timeOffId);
   }
 
   // --- Chairs ---
@@ -264,8 +266,11 @@ export class ClinicsController {
   @Get("staff")
   @RequireClinicAccess(["clinic_admin"])
   @ApiOperation({ summary: "List clinic staff members and pending invitations" })
-  listStaff(@CurrentTenant() tenant: TenantContext) {
-    return this.clinicsService.listStaff(tenant);
+  listStaff(
+    @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User
+  ) {
+    return this.clinicsService.listStaff(tenant, actor);
   }
 
   @Post("staff/invitations")

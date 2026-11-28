@@ -9,6 +9,13 @@ import type { AppEnv } from "./config/env";
 export function configureApp(app: INestApplication): void {
   const configService = app.get(ConfigService<AppEnv, true>);
   const corsOrigin = configService.get("CORS_ORIGIN", { infer: true });
+  const nodeEnv = configService.get("NODE_ENV", { infer: true });
+
+  const httpAdapter = app.getHttpAdapter();
+  const instance = httpAdapter?.getInstance?.() as
+    | { set?: (key: string, value: unknown) => void }
+    | undefined;
+  instance?.set?.("trust proxy", 1);
 
   app.useLogger(app.get(Logger));
   app.use(helmet());
@@ -30,25 +37,27 @@ export function configureApp(app: INestApplication): void {
   app.useGlobalFilters(new ApiExceptionFilter());
   app.enableShutdownHooks();
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle("Smile Dental SaaS API")
-    .setDescription(
-      "Multi-tenant dental practice management & dual-resource scheduling API (NestJS + PostgreSQL + Redis + Socket.IO + Cloudflare R2)."
-    )
-    .setVersion("1.0.0")
-    .addBearerAuth(
-      {
-        type: "http",
-        scheme: "bearer",
-        bearerFormat: "JWT",
-        description: "Clerk session JWT",
-      },
-      "clerk-jwt"
-    )
-    .build();
+  if (nodeEnv !== "production" || process.env.ENABLE_SWAGGER === "true") {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle("Smile Dental SaaS API")
+      .setDescription(
+        "Multi-tenant dental practice management & dual-resource scheduling API (NestJS + PostgreSQL + Redis + Socket.IO + Cloudflare R2)."
+      )
+      .setVersion("1.0.0")
+      .addBearerAuth(
+        {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description: "Clerk session JWT",
+        },
+        "clerk-jwt"
+      )
+      .build();
 
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup("api/docs", app, document, {
-    jsonDocumentUrl: "api/docs-json",
-  });
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup("api/docs", app, document, {
+      jsonDocumentUrl: "api/docs-json",
+    });
+  }
 }

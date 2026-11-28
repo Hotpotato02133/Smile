@@ -13,6 +13,7 @@ import { DomainException } from "../../common/exceptions/domain.exception";
 import { PrismaService } from "../../infra/prisma.service";
 import { AppointmentsService } from "../appointments/appointments.service";
 import { assertClinicFeature } from "../auth/guards/clinic-quota.guard";
+import { serializeServiceCategory } from "../clinics/clinics.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { SchedulingService } from "../scheduling/scheduling.service";
 import { StorageService } from "../storage/storage.service";
@@ -40,11 +41,23 @@ export class BookingsService {
   // PUBLIC UNAUTHENTICATED SANITIZED QUERIES (Law #6 — Zero PHI)
   // ============================================================================
 
-  async listPublicClinics() {
+  async listPublicClinics(search?: string) {
     const nowMs = Date.now();
+    const q = search?.trim();
     const clinics = await this.prisma.clinic.findMany({
       where: {
         status: { in: ["active", "trial", "past_due"] },
+        ...(q
+          ? {
+              OR: [
+                { name: { contains: q, mode: "insensitive" } },
+                { city: { contains: q, mode: "insensitive" } },
+                { province: { contains: q, mode: "insensitive" } },
+                { address: { contains: q, mode: "insensitive" } },
+                { tagline: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
       },
       orderBy: { name: "asc" },
       take: 100,
@@ -65,11 +78,16 @@ export class BookingsService {
         slug: c.slug,
         tagline: c.tagline,
         logoStorageKey: c.logoStorageKey,
+        logoUrl: c.logoStorageKey
+          ? this.storageService.getPublicUrl(c.logoStorageKey)
+          : null,
         primaryColorHex: c.primaryColorHex,
         city: c.city,
         province: c.province,
         address: c.address,
         phone: c.phone,
+        activeDentistCount: c.activeDentistCount,
+        activeChairCount: c.activeChairCount,
         isBookable: eligibility.isBookable,
       };
     });
@@ -97,7 +115,7 @@ export class BookingsService {
       nowMs
     );
 
-    const [services, dentists] = await Promise.all([
+    const [servicesRaw, dentists] = await Promise.all([
       this.prisma.service.findMany({
         where: { clinicId: clinic.id, isActive: true },
         orderBy: [{ category: "asc" }, { name: "asc" }],
@@ -116,6 +134,11 @@ export class BookingsService {
       }),
     ]);
 
+    const services = servicesRaw.map((s) => ({
+      ...s,
+      category: serializeServiceCategory(s.category),
+    }));
+
     return {
       clinic: {
         id: clinic.id,
@@ -123,6 +146,9 @@ export class BookingsService {
         slug: clinic.slug,
         tagline: clinic.tagline,
         logoStorageKey: clinic.logoStorageKey,
+        logoUrl: clinic.logoStorageKey
+          ? this.storageService.getPublicUrl(clinic.logoStorageKey)
+          : null,
         primaryColorHex: clinic.primaryColorHex,
         email: clinic.email,
         phone: clinic.phone,
@@ -135,6 +161,8 @@ export class BookingsService {
         requireBookingApproval: clinic.requireBookingApproval,
         operatingHours: clinic.operatingHours,
         featureFlags: clinic.featureFlags,
+        activeDentistCount: clinic.activeDentistCount,
+        activeChairCount: clinic.activeChairCount,
       },
       isBookable: eligibility.isBookable,
       unbookableReason: eligibility.reason,
@@ -218,6 +246,8 @@ export class BookingsService {
       city: c.city,
       province: c.province,
       primaryColorHex: c.primaryColorHex,
+      activeDentistCount: c.activeDentistCount,
+      activeChairCount: c.activeChairCount,
       logoUrl: c.logoStorageKey
         ? this.storageService.getPublicUrl(c.logoStorageKey)
         : null,
@@ -351,12 +381,25 @@ export class BookingsService {
   async getMyClinicalSummary(user: User, patientId?: string) {
     const ownedIds = await this.getOwnedPatientIds(user.id);
     if (ownedIds.length === 0) {
-      return { toothRecords: [], files: [], completedVisits: [] };
+      return {
+        toothRecords: [],
+        files: [],
+        clinicalFiles: [],
+        completedVisits: [],
+        clinicName: null,
+        clinicSlug: null,
+        nextRecallDate: null,
+        lastCleaningDate: null,
+      };
     }
     const targetIds =
       patientId && ownedIds.includes(patientId) ? [patientId] : ownedIds;
 
-    const [toothRecords, files, completedVisits] = await Promise.all([
+    const [targetPatient, toothRecords, files, completedVisits] = await Promise.all([
+      this.prisma.patient.findFirst({
+        where: { id: targetIds[0] },
+        include: { clinic: { select: { name: true, slug: true } } },
+      }),
       this.prisma.toothRecord.findMany({
         where: { patientId: { in: targetIds } },
         include: {
@@ -390,6 +433,10 @@ export class BookingsService {
     );
 
     return {
+      clinicName: targetPatient?.clinic?.name ?? null,
+      clinicSlug: targetPatient?.clinic?.slug ?? null,
+      nextRecallDate: targetPatient?.nextRecallDate ?? null,
+      lastCleaningDate: targetPatient?.lastCleaningDate ?? null,
       toothRecords: toothRecords.map((r) => ({
         ...r,
         recordedByDentistName: r.recordedByDentist.displayName,
@@ -405,13 +452,18 @@ export class BookingsService {
       where: { id: waitlistId },
       include: {
         clinic: { select: { id: true, name: true, slug: true } },
+        patient: { select: { id: true, firstName: true, lastName: true } },
         service: true,
         preferredDentist: { select: { id: true, displayName: true } },
       },
     });
     if (!entry) return null;
     await this.assertPatientOwnedByUser(user.id, entry.patientId);
-    return entry;
+    return {
+      ...entry,
+      serviceName: entry.service.name,
+      patientName: `${entry.patient.firstName} ${entry.patient.lastName}`.trim(),
+    };
   }
 
   async getMyProfilesForClinic(user: User, clinicId: string) {
@@ -939,7 +991,11 @@ export class BookingsService {
       action: "cancelled",
     });
 
-    return updated;
+    const featureFlags = appt.clinic.featureFlags as Record<string, unknown> | null;
+    return {
+      ...updated,
+      waitlistEnabled: Boolean(featureFlags?.waitlistAutomationEnabled),
+    };
   }
 
   async rescheduleMyAppointment(
@@ -996,7 +1052,7 @@ export class BookingsService {
       );
     }
 
-    return this.appointmentsService.rescheduleAppointment(
+    const rescheduled = await this.appointmentsService.rescheduleAppointment(
       {
         clinicId: appt.clinicId,
         clinic: appt.clinic,
@@ -1011,6 +1067,16 @@ export class BookingsService {
         chairId: nextChairId,
       }
     );
+
+    const dentist = await this.prisma.dentist.findUnique({
+      where: { id: rescheduled.dentistId },
+      select: { displayName: true },
+    });
+
+    return {
+      ...rescheduled,
+      dentistName: dentist?.displayName ?? "",
+    };
   }
 
   async joinWaitlist(user: User, dto: JoinWaitlistDto) {
@@ -1028,7 +1094,70 @@ export class BookingsService {
     }
 
     assertClinicFeature(clinic, "waitlistAutomationEnabled");
-    const patient = await this.assertPatientOwnedByUser(user.id, dto.patientId);
+
+    const [service, preferredDentist] = await Promise.all([
+      this.prisma.service.findFirst({
+        where: { id: dto.serviceId, clinicId: clinic.id, isActive: true },
+        select: { id: true },
+      }),
+      dto.preferredDentistId
+        ? this.prisma.dentist.findFirst({
+            where: { id: dto.preferredDentistId, clinicId: clinic.id, isActive: true },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    if (!service) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Dental service not found in this clinic.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    if (dto.preferredDentistId && !preferredDentist) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Preferred dentist not found in this clinic.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+
+    let patient;
+    if (dto.patientId) {
+      patient = await this.assertPatientOwnedByUser(user.id, dto.patientId);
+      if (patient.clinicId !== clinic.id) {
+        throw new DomainException(
+          API_ERROR_CODES.FORBIDDEN,
+          "Patient profile does not belong to this clinic.",
+          HttpStatus.FORBIDDEN
+        );
+      }
+    } else {
+      patient = await this.prisma.patient.findFirst({
+        where: { clinicId: clinic.id, userId: user.id, guardianPatientId: null },
+      });
+      if (!patient) {
+        patient = await this.prisma.patient.create({
+          data: {
+            clinicId: clinic.id,
+            userId: user.id,
+            firstName: user.firstName || "Patient",
+            lastName: user.lastName || "",
+            dateOfBirth: "1990-01-01",
+            sex: "other",
+            phone: user.phone || "0000000000",
+            email: user.email,
+            medicalHistory: {
+              allergies: [],
+              conditions: [],
+              isTakingBloodThinners: false,
+              isPregnant: false,
+              dentalAnxietyLevel: "none",
+            } as unknown as Prisma.InputJsonValue,
+          },
+        });
+      }
+    }
 
     const entry = await this.prisma.waitlistEntry.create({
       data: {
@@ -1073,7 +1202,11 @@ export class BookingsService {
   ) {
     const entry = await this.prisma.waitlistEntry.findUnique({
       where: { id: waitlistId },
-      include: { clinic: true },
+      include: {
+        clinic: true,
+        patient: { select: { firstName: true, lastName: true } },
+        service: { select: { name: true, pricePhp: true } },
+      },
     });
     if (!entry) {
       throw new DomainException(
@@ -1092,13 +1225,20 @@ export class BookingsService {
       );
     }
 
+    const resolvedDateKey =
+      dto.dateKey ??
+      this.appointmentsService.getDateKeyForClinic(
+        dto.startTimeUtc,
+        entry.clinic.timezone || "Asia/Manila"
+      );
+
     const appointment = await this.appointmentsService.bookSlotAtomically({
       clinic: entry.clinic,
       patientId: entry.patientId,
       serviceId: entry.serviceId,
       dentistId: dto.dentistId,
       chairId: dto.chairId,
-      dateKey: dto.dateKey,
+      dateKey: resolvedDateKey,
       startTimeUtc: dto.startTimeUtc,
       status: AppointmentStatus.confirmed,
       bookingSource: BookingSource.waitlist_claim,
@@ -1119,6 +1259,32 @@ export class BookingsService {
       dateKey: entry.preferredDateKey,
     });
 
-    return appointment;
+    const [dentist, chair] = await Promise.all([
+      this.prisma.dentist.findUnique({
+        where: { id: appointment.dentistId },
+        select: { displayName: true },
+      }),
+      this.prisma.chair.findUnique({
+        where: { id: appointment.chairId },
+        select: { name: true },
+      }),
+    ]);
+
+    return {
+      ...appointment,
+      appointmentId: appointment.id,
+      referenceCode: `SM-${appointment.id.slice(0, 8).toUpperCase()}`,
+      patientName: `${entry.patient.firstName} ${entry.patient.lastName}`.trim(),
+      clinicName: entry.clinic.name,
+      clinicAddress: entry.clinic.address,
+      clinicPhone: entry.clinic.phone,
+      cancellationWindowHours: entry.clinic.cancellationWindowHours,
+      serviceName: entry.service.name,
+      pricePhp: entry.service.pricePhp,
+      dentistName: dentist?.displayName ?? "",
+      chairName: chair?.name ?? "",
+      startTimeUtc: appointment.startTimeUtc.getTime(),
+      endTimeUtc: appointment.endTimeUtc.getTime(),
+    };
   }
 }

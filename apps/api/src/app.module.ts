@@ -52,7 +52,11 @@ import { WebhooksModule } from "./modules/webhooks/webhooks.module";
                     },
                   }
                 : undefined,
-            redact: ["req.headers.authorization", "req.headers.cookie"],
+            redact: [
+              "req.headers.authorization",
+              "req.headers.cookie",
+              'req.headers["x-cron-secret"]',
+            ],
           },
         };
       },

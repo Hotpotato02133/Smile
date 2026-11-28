@@ -31,8 +31,11 @@ jobs:
       - name: Build all workspaces (Turborepo)
         run: npm run build
 
-      - name: Typecheck API & Shared
-        run: npm run typecheck --workspace=@smile/shared && npm run typecheck --workspace=@smile/api
+      - name: Lint Web Workspace
+        run: npm run lint --workspace=@smile/web
+
+      - name: Typecheck All Workspaces
+        run: npm run typecheck
 
       - name: Run API Supertest E2E & Concurrency Tests
         run: npm run test:e2e --workspace=@smile/api

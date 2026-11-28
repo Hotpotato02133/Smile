@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Pool } from "pg";
 import type { AppEnv } from "../config/env";
@@ -7,6 +7,7 @@ export type DependencyStatus = "up" | "down" | "unconfigured";
 
 @Injectable()
 export class PostgresHealthService implements OnModuleDestroy {
+  private readonly logger = new Logger(PostgresHealthService.name);
   private readonly pool: Pool | null;
 
   constructor(configService: ConfigService<AppEnv, true>) {
@@ -20,6 +21,9 @@ export class PostgresHealthService implements OnModuleDestroy {
       max: 2,
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 10000,
+    });
+    this.pool.on("error", (err) => {
+      this.logger.warn(`Idle PostgreSQL health pool error: ${err.message}`);
     });
   }
 

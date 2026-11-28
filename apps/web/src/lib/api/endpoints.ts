@@ -720,7 +720,12 @@ export const api = {
       "appointments.frontDesk",
       () => "/api/v1/appointments/front-desk",
       {
-        buildQuery: (a) => ({ ...overrideQuery(a), dateKey: a?.dateKey }),
+        buildQuery: (a) => ({
+          ...overrideQuery(a),
+          dateKey: a?.dateKey,
+          rangeStartKey: a?.rangeStartKey,
+          rangeEndKey: a?.rangeEndKey,
+        }),
         transform: (raw) => {
           const data = (raw ?? {}) as AnyRecord;
           const appts = Array.isArray(data.appointments) ? data.appointments : [];
@@ -899,7 +904,10 @@ export const api = {
     listPublicClinics: queryEndpoint<PublicClinicSummary[]>(
       "publicBooking.clinics",
       () => "/api/v1/public/clinics",
-      { isPublic: true }
+      {
+        isPublic: true,
+        buildQuery: (a) => ({ search: a?.search }),
+      }
     ),
     getPublicClinicBySlug: queryEndpoint<PublicClinicPortal>(
       "publicBooking.clinicBySlug",

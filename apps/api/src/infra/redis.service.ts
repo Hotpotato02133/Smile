@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
 import type { AppEnv } from "../config/env";
@@ -6,6 +6,7 @@ import type { DependencyStatus } from "./postgres-health.service";
 
 @Injectable()
 export class RedisService implements OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
   private readonly client: Redis | null;
 
   constructor(configService: ConfigService<AppEnv, true>) {
@@ -17,14 +18,16 @@ export class RedisService implements OnModuleDestroy {
 
     this.client = new Redis(redisUrl, {
       lazyConnect: true,
-      maxRetriesPerRequest: 1,
-      connectTimeout: 2000,
+      maxRetriesPerRequest: 2,
+      connectTimeout: 5000,
       enableReadyCheck: false,
-      retryStrategy: () => null,
+      retryStrategy: (times) => (times <= 5 ? Math.min(times * 250, 2000) : null),
     });
 
-    // Prevent unhandled 'error' event crashes during offline health probes
-    this.client.on("error", () => undefined);
+    // Prevent unhandled 'error' event crashes during idle/offline Upstash disconnects
+    this.client.on("error", (err) => {
+      this.logger.warn(`Redis connection warning: ${err.message}`);
+    });
   }
 
   getClient(): Redis | null {

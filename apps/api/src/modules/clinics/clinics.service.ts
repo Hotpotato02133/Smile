@@ -42,8 +42,24 @@ import type {
 } from "./clinics.schemas";
 
 function mapCategoryToPrisma(category: string): ServiceCategory {
-  if (category === "Oral Surgery") return ServiceCategory.OralSurgery;
+  if (category === "Oral Surgery" || category === "OralSurgery") {
+    return ServiceCategory.OralSurgery;
+  }
   return category as ServiceCategory;
+}
+
+export function serializeServiceCategory(category: ServiceCategory | string): string {
+  if (category === ServiceCategory.OralSurgery || category === "OralSurgery") {
+    return "Oral Surgery";
+  }
+  return String(category);
+}
+
+function serializeService<T extends { category: ServiceCategory }>(service: T) {
+  return {
+    ...service,
+    category: serializeServiceCategory(service.category),
+  };
 }
 
 @Injectable()
@@ -146,17 +162,41 @@ export class ClinicsService {
       }),
     ]);
 
-    return {
-      clinic: serializeClinic(tenant.clinic),
-      plan: plan ? serializePlan(plan) : null,
-      availablePlans: availablePlans.map(serializePlan),
-      payments: payments.map((p) => ({
+    const now = new Date();
+    const readOnlyState = evaluateClinicReadOnlyState(
+      {
+        status: tenant.clinic.status,
+        subscriptionEndsAt: tenant.clinic.subscriptionEndsAt.getTime(),
+        gracePeriodEndsAt: tenant.clinic.gracePeriodEndsAt?.getTime() ?? null,
+      },
+      now.getTime(),
+      tenant.isSuperAdminOverride
+    );
+
+    const serializedPlan = plan ? serializePlan(plan) : null;
+    const enrichedPayments = await Promise.all(
+      payments.map(async (p) => ({
         ...p,
         clinicName: tenant.clinic.name,
         clinicSlug: tenant.clinic.slug,
         planName: p.plan.name,
         planCode: p.plan.code,
-      })),
+        receiptUrl:
+          p.receiptStorageKey && this.storageService.isConfigured
+            ? await this.storageService
+                .createPresignedGetUrl(p.receiptStorageKey, 300)
+                .catch(() => null)
+            : null,
+      }))
+    );
+
+    return {
+      clinic: serializeClinic(tenant.clinic),
+      plan: serializedPlan,
+      currentPlan: serializedPlan,
+      ...readOnlyState,
+      availablePlans: availablePlans.map(serializePlan),
+      payments: enrichedPayments,
     };
   }
 
@@ -164,14 +204,122 @@ export class ClinicsService {
     const clampedDays = Math.min(Math.max(days, 7), 90);
     const startKey = toManilaDateKey(Date.now() - (clampedDays - 1) * DAY_MS);
 
-    return this.prisma.clinicMetricDaily.findMany({
-      where: {
-        clinicId: tenant.clinicId,
-        dateKey: { gte: startKey },
+    const [daily, recentAppts] = await Promise.all([
+      this.prisma.clinicMetricDaily.findMany({
+        where: {
+          clinicId: tenant.clinicId,
+          dateKey: { gte: startKey },
+        },
+        orderBy: { dateKey: "asc" },
+        take: clampedDays,
+      }),
+      this.prisma.appointment.findMany({
+        where: {
+          clinicId: tenant.clinicId,
+          dateKey: { gte: startKey },
+        },
+        include: {
+          service: { select: { id: true, name: true, pricePhp: true } },
+          dentist: { select: { id: true, displayName: true, calendarColorHex: true } },
+        },
+      }),
+    ]);
+
+    const totalBooked =
+      daily.reduce((s, d) => s + d.totalBooked, 0) || recentAppts.length;
+    const totalCompleted =
+      daily.reduce((s, d) => s + d.completedCount, 0) ||
+      recentAppts.filter((a) => a.status === "completed").length;
+    const totalNoShows =
+      daily.reduce((s, d) => s + d.noShowCount, 0) ||
+      recentAppts.filter((a) => a.status === "no_show").length;
+    const totalCancelled =
+      daily.reduce((s, d) => s + d.cancelledCount, 0) ||
+      recentAppts.filter((a) => a.status === "cancelled").length;
+    const totalRevenuePhp =
+      daily.reduce((s, d) => s + d.estimatedRevenuePhp, 0) ||
+      recentAppts
+        .filter((a) => a.status === "completed")
+        .reduce((s, a) => s + a.service.pricePhp, 0);
+    const totalNewPatients = daily.reduce((s, d) => s + d.newPatientsCount, 0);
+
+    const denom = Math.max(totalBooked, 1);
+    const completionRate = Math.round((totalCompleted / denom) * 1000) / 10;
+    const noShowRate = Math.round((totalNoShows / denom) * 1000) / 10;
+    const cancellationRate = Math.round((totalCancelled / denom) * 1000) / 10;
+
+    const serviceMap = new Map<
+      string,
+      { serviceId: string; name: string; count: number; revenuePhp: number }
+    >();
+    const dentistMap = new Map<
+      string,
+      {
+        dentistId: string;
+        displayName: string;
+        colorHex: string;
+        total: number;
+        completed: number;
+      }
+    >();
+
+    for (const appt of recentAppts) {
+      const sEntry = serviceMap.get(appt.serviceId) ?? {
+        serviceId: appt.serviceId,
+        name: appt.service.name,
+        count: 0,
+        revenuePhp: 0,
+      };
+      sEntry.count += 1;
+      if (appt.status === "completed") {
+        sEntry.revenuePhp += appt.service.pricePhp;
+      }
+      serviceMap.set(appt.serviceId, sEntry);
+
+      const dEntry = dentistMap.get(appt.dentistId) ?? {
+        dentistId: appt.dentistId,
+        displayName: appt.dentist.displayName,
+        colorHex: appt.dentist.calendarColorHex,
+        total: 0,
+        completed: 0,
+      };
+      dEntry.total += 1;
+      if (appt.status === "completed") {
+        dEntry.completed += 1;
+      }
+      dentistMap.set(appt.dentistId, dEntry);
+    }
+
+    const rows = daily;
+
+    return {
+      rows,
+      daily,
+      timeZone: tenant.clinic.timezone || "Asia/Manila",
+      totals: {
+        totalBooked,
+        completedCount: totalCompleted,
+        noShowCount: totalNoShows,
+        cancelledCount: totalCancelled,
+        estimatedRevenuePhp: totalRevenuePhp,
+        newPatientsCount: totalNewPatients,
       },
-      orderBy: { dateKey: "asc" },
-      take: clampedDays,
-    });
+      rates: {
+        completionRate,
+        noShowRate,
+        cancellationRate,
+        completionRatePct: completionRate,
+        noShowRatePct: noShowRate,
+        cancellationRatePct: cancellationRate,
+      },
+      topServices: Array.from(serviceMap.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8),
+      dentistUtilization: Array.from(dentistMap.values()).sort(
+        (a, b) => b.total - a.total
+      ),
+      includesLiveToday: true,
+    };
   }
 
   async updateSettings(
@@ -179,11 +327,56 @@ export class ClinicsService {
     actor: User,
     dto: UpdateClinicSettingsDto
   ) {
+    if (dto.slug && dto.slug !== tenant.clinic.slug) {
+      const slugConflict = await this.prisma.clinic.findFirst({
+        where: { slug: dto.slug, id: { not: tenant.clinicId } },
+        select: { id: true },
+      });
+      if (slugConflict) {
+        throw new DomainException(
+          API_ERROR_CODES.CONFLICT,
+          `Clinic slug "${dto.slug}" is already taken.`,
+          HttpStatus.CONFLICT
+        );
+      }
+    }
+
+    if (dto.logoStorageKey) {
+      const expectedPrefix = `public/logos/${tenant.clinicId}/`;
+      if (!dto.logoStorageKey.startsWith(expectedPrefix)) {
+        throw new DomainException(
+          API_ERROR_CODES.INVALID_INPUT,
+          "Logo storage key does not belong to this clinic.",
+          HttpStatus.BAD_REQUEST
+        );
+      }
+      if (this.storageService.isConfigured) {
+        const meta = await this.storageService
+          .headObject(dto.logoStorageKey, "public")
+          .catch(() => null);
+        if (!meta || !meta.exists) {
+          throw new DomainException(
+            API_ERROR_CODES.INVALID_INPUT,
+            "Uploaded logo file was not found in storage.",
+            HttpStatus.BAD_REQUEST
+          );
+        }
+        if (meta.sizeBytes > 500 * 1024) {
+          throw new DomainException(
+            API_ERROR_CODES.FILE_TOO_LARGE,
+            "Clinic logo exceeds the 500 KB maximum file size.",
+            HttpStatus.PAYLOAD_TOO_LARGE
+          );
+        }
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.clinic.update({
         where: { id: tenant.clinicId },
         data: {
           ...(dto.name !== undefined ? { name: dto.name } : {}),
+          ...(dto.slug !== undefined ? { slug: dto.slug } : {}),
           ...(dto.tagline !== undefined ? { tagline: dto.tagline } : {}),
           ...(dto.logoStorageKey !== undefined
             ? { logoStorageKey: dto.logoStorageKey }
@@ -248,6 +441,7 @@ export class ClinicsService {
           user: {
             select: {
               id: true,
+              clerkId: true,
               email: true,
               firstName: true,
               lastName: true,
@@ -298,6 +492,9 @@ export class ClinicsService {
       dentists: dentistsRaw.map((d) => ({
         ...d,
         email: d.user?.email,
+        userEmail: d.user?.email ?? null,
+        defaultChairName: d.defaultChair?.name ?? null,
+        isPendingAccount: Boolean(d.user?.clerkId?.startsWith("pending:")),
         timeOff: d.timeOffs,
         upcomingTimeOff: d.timeOffs,
       })),
@@ -324,10 +521,27 @@ export class ClinicsService {
       }
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       let targetUserId = dto.userId;
+      let createdInvitation: {
+        id: string;
+        email: string;
+        token: string | null;
+        expiresAt: Date;
+      } | null = null;
 
-      if (!targetUserId) {
+      if (targetUserId) {
+        const linkedUser = await tx.user.findFirst({
+          where: { id: targetUserId, clinicId: tenant.clinicId },
+        });
+        if (!linkedUser) {
+          throw new DomainException(
+            API_ERROR_CODES.FORBIDDEN,
+            "Selected user does not belong to this clinic.",
+            HttpStatus.FORBIDDEN
+          );
+        }
+      } else {
         if (!dto.email) {
           throw new DomainException(
             API_ERROR_CODES.INVALID_INPUT,
@@ -340,6 +554,16 @@ export class ClinicsService {
           where: { email: dto.email },
         });
         if (existingUser) {
+          if (
+            existingUser.role === "super_admin" ||
+            (existingUser.clinicId && existingUser.clinicId !== tenant.clinicId)
+          ) {
+            throw new DomainException(
+              API_ERROR_CODES.FORBIDDEN,
+              "This email is already assigned to another workspace or platform role.",
+              HttpStatus.FORBIDDEN
+            );
+          }
           targetUserId = existingUser.id;
         } else {
           const placeholder = await tx.user.create({
@@ -355,7 +579,7 @@ export class ClinicsService {
           });
           targetUserId = placeholder.id;
 
-          await tx.staffInvitation.create({
+          createdInvitation = await tx.staffInvitation.create({
             data: {
               clinicId: tenant.clinicId,
               email: dto.email,
@@ -363,6 +587,7 @@ export class ClinicsService {
               token: generateInviteToken(),
               invitedByUserId: actor.id,
               status: StaffInvitationStatus.pending,
+              emailStatus: EmailDeliveryStatus.queued,
               expiresAt: new Date(Date.now() + 7 * DAY_MS),
             },
           });
@@ -403,12 +628,33 @@ export class ClinicsService {
         tx
       );
 
-      return dentist;
+      return { dentist, createdInvitation };
     });
+
+    if (result.createdInvitation?.token) {
+      const inviterName =
+        `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+      await this.notifications
+        .sendRoleInvitationEmail({
+          invitationId: result.createdInvitation.id,
+          clinicId: tenant.clinicId,
+          recipientEmail: result.createdInvitation.email,
+          role: "dentist",
+          scopeName: tenant.clinic.name,
+          accentHex: tenant.clinic.primaryColorHex,
+          inviterName,
+          token: result.createdInvitation.token,
+          expiresAt: result.createdInvitation.expiresAt,
+        })
+        .catch(() => undefined);
+    }
+
+    return result.dentist;
   }
 
   async updateDentist(
     tenant: TenantContext,
+    actor: User,
     dentistId: string,
     dto: UpdateDentistDto
   ) {
@@ -420,6 +666,13 @@ export class ClinicsService {
         API_ERROR_CODES.NOT_FOUND,
         "Dentist not found.",
         HttpStatus.NOT_FOUND
+      );
+    }
+    if (actor.role === "dentist" && existing.userId !== actor.id) {
+      throw new DomainException(
+        API_ERROR_CODES.FORBIDDEN,
+        "Dentists can only modify their own schedule profile.",
+        HttpStatus.FORBIDDEN
       );
     }
 
@@ -523,27 +776,63 @@ export class ClinicsService {
       );
     }
 
-    return this.prisma.dentistTimeOff.create({
-      data: {
-        clinicId: tenant.clinicId,
-        dentistId: dentist.id,
-        startTimeUtc: dto.startTimeUtc,
-        endTimeUtc: dto.endTimeUtc,
-        reason: dto.reason,
-        createdByUserId: actor.id,
-      },
-    });
+    if (actor.role === "dentist" && dentist.userId !== actor.id) {
+      throw new DomainException(
+        API_ERROR_CODES.FORBIDDEN,
+        "Dentists can only create time-off blocks for their own schedule.",
+        HttpStatus.FORBIDDEN
+      );
+    }
+
+    const [created, overlappingCount] = await Promise.all([
+      this.prisma.dentistTimeOff.create({
+        data: {
+          clinicId: tenant.clinicId,
+          dentistId: dentist.id,
+          startTimeUtc: dto.startTimeUtc,
+          endTimeUtc: dto.endTimeUtc,
+          reason: dto.reason,
+          createdByUserId: actor.id,
+        },
+      }),
+      this.prisma.appointment.count({
+        where: {
+          clinicId: tenant.clinicId,
+          dentistId: dentist.id,
+          status: { notIn: ["cancelled", "no_show", "completed"] },
+          startTimeUtc: { lt: dto.endTimeUtc },
+          endTimeUtc: { gt: dto.startTimeUtc },
+        },
+      }),
+    ]);
+
+    return {
+      ...created,
+      overlappingCount,
+    };
   }
 
-  async deleteDentistTimeOff(tenant: TenantContext, timeOffId: string) {
+  async deleteDentistTimeOff(
+    tenant: TenantContext,
+    actor: User,
+    timeOffId: string
+  ) {
     const existing = await this.prisma.dentistTimeOff.findFirst({
       where: { id: timeOffId, clinicId: tenant.clinicId },
+      include: { dentist: { select: { userId: true } } },
     });
     if (!existing) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
         "Time-off block not found.",
         HttpStatus.NOT_FOUND
+      );
+    }
+    if (actor.role === "dentist" && existing.dentist.userId !== actor.id) {
+      throw new DomainException(
+        API_ERROR_CODES.FORBIDDEN,
+        "Dentists can only remove their own time-off blocks.",
+        HttpStatus.FORBIDDEN
       );
     }
     await this.prisma.dentistTimeOff.delete({ where: { id: timeOffId } });
@@ -677,7 +966,21 @@ export class ClinicsService {
         tx
       );
 
-      return updated;
+      const upcomingAppointmentsCount = !nextActive
+        ? await tx.appointment.count({
+            where: {
+              clinicId: tenant.clinicId,
+              chairId,
+              status: { in: ["pending_approval", "confirmed", "checked_in", "in_chair"] },
+              startTimeUtc: { gte: new Date() },
+            },
+          })
+        : 0;
+
+      return {
+        ...updated,
+        upcomingAppointmentsCount,
+      };
     });
   }
 
@@ -686,14 +989,15 @@ export class ClinicsService {
   // ============================================================================
 
   async listServices(tenant: TenantContext) {
-    return this.prisma.service.findMany({
+    const rows = await this.prisma.service.findMany({
       where: { clinicId: tenant.clinicId },
       orderBy: [{ category: "asc" }, { name: "asc" }],
     });
+    return rows.map(serializeService);
   }
 
   async createService(tenant: TenantContext, dto: CreateServiceDto) {
-    return this.prisma.service.create({
+    const created = await this.prisma.service.create({
       data: {
         clinicId: tenant.clinicId,
         name: dto.name,
@@ -707,6 +1011,7 @@ export class ClinicsService {
         isActive: true,
       },
     });
+    return serializeService(created);
   }
 
   async updateService(
@@ -725,7 +1030,7 @@ export class ClinicsService {
       );
     }
 
-    return this.prisma.service.update({
+    const updated = await this.prisma.service.update({
       where: { id: serviceId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
@@ -748,6 +1053,7 @@ export class ClinicsService {
           : {}),
       },
     });
+    return serializeService(updated);
   }
 
   async toggleServiceActive(tenant: TenantContext, serviceId: string) {
@@ -761,10 +1067,11 @@ export class ClinicsService {
         HttpStatus.NOT_FOUND
       );
     }
-    return this.prisma.service.update({
+    const updated = await this.prisma.service.update({
       where: { id: serviceId },
       data: { isActive: !existing.isActive },
     });
+    return serializeService(updated);
   }
 
   async seedDefaultServices(tenant: TenantContext) {
@@ -800,7 +1107,7 @@ export class ClinicsService {
   // STAFF & CLINIC INVITATIONS
   // ============================================================================
 
-  async listStaff(tenant: TenantContext) {
+  async listStaff(tenant: TenantContext, actor: User) {
     const [membersRaw, invitations] = await Promise.all([
       this.prisma.user.findMany({
         where: {
@@ -860,6 +1167,7 @@ export class ClinicsService {
     );
 
     return {
+      currentUserId: actor.id,
       members,
       staff: members,
       invitations: enrichedInvitations,
@@ -1055,11 +1363,31 @@ export class ClinicsService {
       );
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const row = await tx.user.update({
         where: { id: target.id },
         data: { isActive: !target.isActive },
       });
+
+      let deactivatedDentistProfile = false;
+      if (!row.isActive) {
+        const linkedDentist = await tx.dentist.findFirst({
+          where: { clinicId: tenant.clinicId, userId: target.id, isActive: true },
+        });
+        if (linkedDentist) {
+          await tx.dentist.update({
+            where: { id: linkedDentist.id },
+            data: { isActive: false },
+          });
+          await tx.clinic.update({
+            where: { id: tenant.clinicId },
+            data: {
+              activeDentistCount: Math.max(0, tenant.clinic.activeDentistCount - 1),
+            },
+          });
+          deactivatedDentistProfile = true;
+        }
+      }
 
       await this.auditService.record(
         {
@@ -1069,18 +1397,25 @@ export class ClinicsService {
           actionType: row.isActive ? "STAFF_REACTIVATED" : "STAFF_DEACTIVATED",
           targetEntity: "users",
           targetId: target.id,
-          metadata: { email: target.email, role: target.role },
+          metadata: {
+            email: target.email,
+            role: target.role,
+            deactivatedDentistProfile,
+          },
         },
         tx
       );
-      return row;
+      return { row, deactivatedDentistProfile };
     });
 
     await this.clerkService.syncPublicMetadata(
-      updated.clerkId,
-      updated.role,
-      updated.clinicId
+      result.row.clerkId,
+      result.row.role,
+      result.row.clinicId
     );
-    return updated;
+    return {
+      ...result.row,
+      deactivatedDentistProfile: result.deactivatedDentistProfile,
+    };
   }
 }

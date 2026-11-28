@@ -97,7 +97,7 @@ export const joinWaitlistSchema = z
   .object({
     clinicSlug: z.string().trim().min(2).optional(),
     clinicId: z.string().uuid().optional(),
-    patientId: z.string().uuid(),
+    patientId: z.string().uuid().optional(),
     serviceId: z.string().uuid(),
     preferredDentistId: z.string().uuid().optional(),
     preferredDateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -111,7 +111,7 @@ export const joinWaitlistSchema = z
 export const claimWaitlistSchema = z.object({
   dentistId: z.string().uuid(),
   chairId: z.string().uuid(),
-  dateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   startTimeUtc: z.number().int().positive(),
   sessionId: z.string().trim().min(4).max(120).optional(),
 });

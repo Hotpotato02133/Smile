@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from "@nestjs/common";
+import { Controller, Get, Param, Query } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { BookingsService } from "./bookings.service";
 
@@ -9,8 +9,8 @@ export class PublicBookingController {
 
   @Get()
   @ApiOperation({ summary: "List sanitized public clinics accepting bookings (zero PHI)" })
-  listClinics() {
-    return this.bookingsService.listPublicClinics();
+  listClinics(@Query("search") search?: string) {
+    return this.bookingsService.listPublicClinics(search);
   }
 
   @Get(":slug")

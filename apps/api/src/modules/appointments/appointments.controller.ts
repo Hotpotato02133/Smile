@@ -26,6 +26,8 @@ import {
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { TenantAccessGuard } from "../auth/guards/tenant-access.guard";
 import {
+  type CreateMyTimeOffDto,
+  createMyTimeOffSchema,
   type CreateWalkInBookingDto,
   createWalkInBookingSchema,
   type RescheduleAppointmentDto,
@@ -54,9 +56,17 @@ export class AppointmentsController {
   getFrontDesk(
     @CurrentTenant() tenant: TenantContext,
     @CurrentUser() actor: User,
-    @Query("dateKey") dateKey?: string
+    @Query("dateKey") dateKey?: string,
+    @Query("rangeStartKey") rangeStartKey?: string,
+    @Query("rangeEndKey") rangeEndKey?: string
   ) {
-    return this.appointmentsService.getFrontDeskWorkspace(tenant, actor, dateKey);
+    return this.appointmentsService.getFrontDeskWorkspace(
+      tenant,
+      actor,
+      dateKey,
+      rangeStartKey,
+      rangeEndKey
+    );
   }
 
   @Get("dentist-queue")
@@ -180,9 +190,7 @@ export class AppointmentsController {
     @CurrentTenant() tenant: TenantContext,
     @Param("id") id: string
   ) {
-    return this.appointmentsService.updateWaitlistStatus(tenant, id, {
-      status: "notified",
-    });
+    return this.appointmentsService.sendManualWaitlistOffer(tenant, id);
   }
 
   @Get("dentist-time-off")
@@ -220,13 +228,8 @@ export class AppointmentsController {
   createMyTimeOff(
     @CurrentTenant() tenant: TenantContext,
     @CurrentUser() actor: User,
-    @Body()
-    body: {
-      dentistId?: string;
-      startTimeUtc: number | string;
-      endTimeUtc: number | string;
-      reason: string;
-    }
+    @Body(new ZodValidationPipe(createMyTimeOffSchema))
+    body: CreateMyTimeOffDto
   ) {
     return this.appointmentsService.createMyTimeOff(tenant, actor, body);
   }
@@ -237,8 +240,9 @@ export class AppointmentsController {
   @ApiOperation({ summary: "Remove a dentist time-off block" })
   removeMyTimeOff(
     @CurrentTenant() tenant: TenantContext,
+    @CurrentUser() actor: User,
     @Param("id") id: string
   ) {
-    return this.appointmentsService.removeMyTimeOff(tenant, id);
+    return this.appointmentsService.removeMyTimeOff(tenant, actor, id);
   }
 }

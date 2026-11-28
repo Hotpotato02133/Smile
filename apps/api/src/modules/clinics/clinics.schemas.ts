@@ -7,6 +7,12 @@ import { z } from "zod";
 
 export const updateClinicSettingsSchema = z.object({
   name: z.string().trim().min(2).max(140).optional(),
+  slug: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase alphanumeric with hyphens")
+    .optional(),
   tagline: z.string().trim().max(200).nullable().optional(),
   logoStorageKey: z.string().trim().max(300).nullable().optional(),
   primaryColorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
@@ -23,19 +29,30 @@ export const updateClinicSettingsSchema = z.object({
   operatingHours: z.array(OperatingHoursDaySchema).length(7).optional(),
 });
 
-export const createDentistSchema = z.object({
-  userId: z.string().uuid().optional(),
-  email: z.string().trim().email().transform((s) => s.toLowerCase()).optional(),
-  firstName: z.string().trim().min(1).max(80).optional(),
-  lastName: z.string().trim().max(80).optional(),
-  displayName: z.string().trim().min(2).max(120),
-  licenseNumber: z.string().trim().min(2).max(60),
-  specialties: z.array(z.string().trim().min(1)).min(1),
-  bio: z.string().trim().max(1000).optional(),
-  calendarColorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#0284c7"),
-  defaultChairId: z.string().uuid().nullable().optional(),
-  weeklySchedule: z.array(WeeklyScheduleDaySchema).length(7).optional(),
-});
+export const createDentistSchema = z
+  .object({
+    userId: z.string().uuid().optional(),
+    email: z.string().trim().email().transform((s) => s.toLowerCase()).optional(),
+    inviteEmail: z
+      .string()
+      .trim()
+      .email()
+      .transform((s) => s.toLowerCase())
+      .optional(),
+    firstName: z.string().trim().min(1).max(80).optional(),
+    lastName: z.string().trim().max(80).optional(),
+    displayName: z.string().trim().min(2).max(120),
+    licenseNumber: z.string().trim().min(2).max(60),
+    specialties: z.array(z.string().trim().min(1)).min(1),
+    bio: z.string().trim().max(1000).optional(),
+    calendarColorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#0284c7"),
+    defaultChairId: z.string().uuid().nullable().optional(),
+    weeklySchedule: z.array(WeeklyScheduleDaySchema).length(7).optional(),
+  })
+  .transform((data) => ({
+    ...data,
+    email: data.email ?? data.inviteEmail,
+  }));
 
 export const updateDentistSchema = z.object({
   displayName: z.string().trim().min(2).max(120).optional(),

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { intervalsOverlap, SLOT_LOCK_DURATION_MS } from "@smile/shared";
 import { RedisService } from "../../infra/redis.service";
 
@@ -97,6 +97,8 @@ export class SlotLockService {
   /** Fallback in-memory lock table when REDIS_URL is unconfigured (tests/offline dev). */
   private readonly memoryBuckets = new Map<string, Map<string, SlotLockRecord>>();
 
+  private readonly logger = new Logger(SlotLockService.name);
+
   constructor(private readonly redisService: RedisService) {}
 
   private bucketKey(clinicId: string, dateKey: string): string {
@@ -107,7 +109,7 @@ export class SlotLockService {
     const client = this.redisService.getClient();
     if (!client) return null;
     try {
-      if (client.status === "wait") {
+      if (client.status === "wait" || client.status === "end") {
         await client.connect();
       }
       if (client.status === "ready" || client.status === "connect") {
@@ -128,19 +130,27 @@ export class SlotLockService {
     const redis = await this.getReadyRedis();
 
     if (redis) {
-      const rawMap = await redis.hgetall(key);
-      const active: SlotLockRecord[] = [];
-      for (const raw of Object.values(rawMap)) {
-        try {
-          const parsed = JSON.parse(raw) as SlotLockRecord;
-          if (parsed.expiresAtUtc > nowMs) {
-            active.push(parsed);
+      try {
+        const rawMap = await redis.hgetall(key);
+        const active: SlotLockRecord[] = [];
+        for (const raw of Object.values(rawMap)) {
+          try {
+            const parsed = JSON.parse(raw) as SlotLockRecord;
+            if (parsed.expiresAtUtc > nowMs) {
+              active.push(parsed);
+            }
+          } catch {
+            // Ignore corrupted entries
           }
-        } catch {
-          // Ignore corrupted entries
         }
+        return active;
+      } catch (err) {
+        this.logger.warn(
+          `Redis hgetall failed for ${key}, falling back to memory locks: ${
+            err instanceof Error ? err.message : "unknown"
+          }`
+        );
       }
-      return active;
     }
 
     const bucket = this.memoryBuckets.get(key);
@@ -185,25 +195,33 @@ export class SlotLockService {
     const redis = await this.getReadyRedis();
 
     if (redis) {
-      const result = (await redis.eval(
-        ACQUIRE_INTERVAL_LOCK_LUA,
-        1,
-        key,
-        String(nowMs),
-        lockId,
-        params.dentistId,
-        params.chairId,
-        String(params.startTimeUtc),
-        String(params.bufferEndTimeUtc),
-        params.sessionId,
-        String(expiresAtUtc),
-        JSON.stringify(record)
-      )) as [string, string];
+      try {
+        const result = (await redis.eval(
+          ACQUIRE_INTERVAL_LOCK_LUA,
+          1,
+          key,
+          String(nowMs),
+          lockId,
+          params.dentistId,
+          params.chairId,
+          String(params.startTimeUtc),
+          String(params.bufferEndTimeUtc),
+          params.sessionId,
+          String(expiresAtUtc),
+          JSON.stringify(record)
+        )) as [string, string];
 
-      if (result[0] === "CONFLICT") {
-        return { ok: false, conflictLockId: result[1] };
+        if (result[0] === "CONFLICT") {
+          return { ok: false, conflictLockId: result[1] };
+        }
+        return { ok: true, lock: record };
+      } catch (err) {
+        this.logger.warn(
+          `Redis acquireAtomicIntervalLock failed for ${key}, falling back to memory locks: ${
+            err instanceof Error ? err.message : "unknown"
+          }`
+        );
       }
-      return { ok: true, lock: record };
     }
 
     // Synchronous single-threaded JS atomic fallback matching the exact Lua semantics
@@ -248,14 +266,22 @@ export class SlotLockService {
     const redis = await this.getReadyRedis();
 
     if (redis) {
-      const released = await redis.eval(
-        RELEASE_SESSION_LOCKS_LUA,
-        1,
-        key,
-        String(nowMs),
-        sessionId
-      );
-      return Number(released ?? 0);
+      try {
+        const released = await redis.eval(
+          RELEASE_SESSION_LOCKS_LUA,
+          1,
+          key,
+          String(nowMs),
+          sessionId
+        );
+        return Number(released ?? 0);
+      } catch (err) {
+        this.logger.warn(
+          `Redis releaseSessionLocks failed for ${key}, falling back to memory locks: ${
+            err instanceof Error ? err.message : "unknown"
+          }`
+        );
+      }
     }
 
     const bucket = this.memoryBuckets.get(key);

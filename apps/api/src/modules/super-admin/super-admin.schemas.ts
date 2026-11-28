@@ -38,8 +38,17 @@ export const createClinicSchema = z.object({
     .email()
     .transform((s) => s.toLowerCase())
     .optional(),
+  ownerEmail: z
+    .string()
+    .trim()
+    .email()
+    .transform((s) => s.toLowerCase())
+    .optional(),
   seedDefaultServices: z.boolean().default(true),
-});
+}).transform((data) => ({
+  ...data,
+  adminInviteEmail: data.adminInviteEmail ?? data.ownerEmail,
+}));
 
 export const updateClinicDetailsSchema = z.object({
   name: z.string().trim().min(2).max(140).optional(),

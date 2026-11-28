@@ -328,4 +328,39 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
 
     return { emailStatus, emailError, result };
   }
+
+  async sendWaitlistOpeningOffer(params: {
+    clinicId: string;
+    clinicName: string;
+    clinicSlug: string;
+    primaryColorHex: string;
+    patientEmail: string;
+    patientName: string;
+    serviceName: string;
+    preferredDateKey: string;
+    waitlistId: string;
+  }): Promise<EmailDispatchResult> {
+    const claimUrl = `${this.getAppBaseUrl()}/c/${params.clinicSlug}?waitlistId=${encodeURIComponent(params.waitlistId)}`;
+    const accent = params.primaryColorHex || "#6C5CE7";
+    const subject = `An opening is available at ${params.clinicName} (${params.preferredDateKey})`;
+    const text = `Hi ${params.patientName},\n\nA slot has opened up for ${params.serviceName} on ${params.preferredDateKey} at ${params.clinicName}.\nClaim it online: ${claimUrl}\n`;
+    const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#0f172a">
+      <div style="border-top:4px solid ${accent};padding-top:16px">
+        <h2 style="margin:0 0 8px">${params.clinicName}</h2>
+        <p>Hi ${params.patientName},</p>
+        <p>Good news! A dental slot is now open for <strong>${params.serviceName}</strong> on <strong>${params.preferredDateKey}</strong>.</p>
+        <p style="margin:24px 0"><a href="${claimUrl}" style="display:inline-block;background:${accent};color:#ffffff;padding:12px 20px;border-radius:999px;text-decoration:none;font-weight:600">Claim Open Slot</a></p>
+        <p style="font-size:12px;color:#64748b">Slots are claimed first-come, first-served.</p>
+      </div>
+    </div>`;
+
+    return this.enqueueOrSend({
+      clinicId: params.clinicId,
+      to: params.patientEmail,
+      subject,
+      html,
+      text,
+      fromName: params.clinicName,
+    });
+  }
 }

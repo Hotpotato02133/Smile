@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
@@ -8,6 +8,7 @@ import type { DependencyStatus } from "./postgres-health.service";
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleDestroy {
+  private readonly logger = new Logger(PrismaService.name);
   private readonly pool: Pool | null;
   public readonly isConfigured: boolean;
 
@@ -31,6 +32,11 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
 
     this.pool = pool;
     this.isConfigured = Boolean(databaseUrl);
+
+    // Prevent uncaught 'error' events when serverless PostgreSQL (Neon) auto-suspends idle clients
+    this.pool.on("error", (err) => {
+      this.logger.warn(`Idle PostgreSQL pool client error: ${err.message}`);
+    });
   }
 
   async checkHealth(): Promise<{ status: DependencyStatus; error?: string }> {

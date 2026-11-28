@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -51,17 +52,13 @@ export class InvitationsController {
 
   @Post(":token/decline")
   @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth("clerk-jwt")
-  @UseGuards(ClerkJwtGuard)
-  @AllowUnprovisionedUser()
-  @AllowInactiveUser()
-  @ApiOperation({ summary: "Decline a pending invitation" })
+  @ApiOperation({ summary: "Decline a pending invitation (signed in or via invite token)" })
   declineInvitation(
     @Param("token") token: string,
-    @CurrentAuth() auth: AuthContext,
+    @Headers("authorization") authorization: string | undefined,
     @Body(new ZodValidationPipe(declineInvitationSchema))
     body: { reason?: string }
   ) {
-    return this.invitationsService.declineByToken(token, auth, body.reason);
+    return this.invitationsService.declineByToken(token, authorization, body.reason);
   }
 }

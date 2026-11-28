@@ -13,9 +13,31 @@ import { ClerkService } from "../auth/clerk.service";
 export const CLINIC_ROOM = (clinicId: string) => `clinic:${clinicId}`;
 export const PUBLIC_CLINIC_ROOM = (slug: string) => `public:clinic:${slug}`;
 
+function parseAllowedSocketOrigins(): string[] {
+  const raw = process.env.CORS_ORIGIN ?? "http://localhost:3000";
+  return raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+}
+
 @WebSocketGateway({
   cors: {
-    origin: true,
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void
+    ) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      const allowed = parseAllowedSocketOrigins();
+      if (allowed.includes("*") || allowed.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin ${origin} not allowed by CORS`), false);
+    },
     credentials: true,
   },
 })

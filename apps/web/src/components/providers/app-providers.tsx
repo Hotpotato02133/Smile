@@ -9,10 +9,11 @@ import { API_BASE_URL, ApiClientError, SocketProvider } from "@/lib/api";
 
 const clerkPublishableKey =
   process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim() ?? "";
-const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim() || API_BASE_URL;
-
+const explicitApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
 const hasClerk = Boolean(clerkPublishableKey);
-const hasApi = Boolean(apiUrl);
+const hasApi = Boolean(
+  explicitApiUrl || (process.env.NODE_ENV !== "production" && API_BASE_URL)
+);
 
 type EnvConfig = {
   hasClerk: boolean;

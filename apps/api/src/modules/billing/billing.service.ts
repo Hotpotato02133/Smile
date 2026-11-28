@@ -10,6 +10,7 @@ import { DomainException } from "../../common/exceptions/domain.exception";
 import { generateInvoiceNumber } from "../../common/utils/manila-time";
 import { PrismaService } from "../../infra/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { StorageService } from "../storage/storage.service";
 import { serializePlan } from "../super-admin/super-admin.service";
 import type {
   RecordPaymentDto,
@@ -21,7 +22,8 @@ import type {
 export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly auditService: AuditService
+    private readonly auditService: AuditService,
+    private readonly storageService: StorageService
   ) {}
 
   async listPlans() {
@@ -151,13 +153,21 @@ export class BillingService {
       take,
     });
 
-    return payments.map((p) => ({
-      ...p,
-      clinicName: p.clinic.name,
-      clinicSlug: p.clinic.slug,
-      planName: p.plan.name,
-      planCode: p.plan.code,
-    }));
+    return Promise.all(
+      payments.map(async (p) => ({
+        ...p,
+        clinicName: p.clinic.name,
+        clinicSlug: p.clinic.slug,
+        planName: p.plan.name,
+        planCode: p.plan.code,
+        receiptUrl:
+          p.receiptStorageKey && this.storageService.isConfigured
+            ? await this.storageService
+                .createPresignedGetUrl(p.receiptStorageKey, 300)
+                .catch(() => null)
+            : null,
+      }))
+    );
   }
 
   async recordPayment(actor: User, dto: RecordPaymentDto) {

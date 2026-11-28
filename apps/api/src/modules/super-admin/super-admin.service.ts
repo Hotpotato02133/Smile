@@ -327,6 +327,8 @@ export class SuperAdminService {
       });
       return {
         clinic: created.clinic,
+        slug: created.clinic.slug,
+        ownerInviteToken: created.invitation.token,
         invitation: {
           ...created.invitation,
           emailStatus: delivery.emailStatus,
@@ -335,7 +337,11 @@ export class SuperAdminService {
       };
     }
 
-    return created;
+    return {
+      ...created,
+      slug: created.clinic.slug,
+      ownerInviteToken: null,
+    };
   }
 
   async updateClinicDetails(
@@ -1032,7 +1038,20 @@ export class SuperAdminService {
       this.prisma.platformAuditLog.count({ where }),
     ]);
 
-    return { items, total, limit: take, offset: skip };
+    const enrichedItems = items.map((item) => {
+      const actorName = item.actorUser
+        ? `${item.actorUser.firstName} ${item.actorUser.lastName}`.trim() ||
+          item.actorUser.email
+        : "System";
+      return {
+        ...item,
+        actorName,
+        actorEmail: item.actorUser?.email ?? "",
+        clinicName: item.clinic?.name ?? null,
+      };
+    });
+
+    return { items: enrichedItems, total, limit: take, offset: skip };
   }
 
   async listAuditActors() {
@@ -1043,10 +1062,14 @@ export class SuperAdminService {
     });
     const ids = grouped.map((g) => g.actorUserId);
     if (ids.length === 0) return [];
-    return this.prisma.user.findMany({
+    const users = await this.prisma.user.findMany({
       where: { id: { in: ids } },
       select: { id: true, email: true, firstName: true, lastName: true, role: true },
     });
+    return users.map((u) => ({
+      ...u,
+      name: `${u.firstName} ${u.lastName}`.trim() || u.email,
+    }));
   }
 
   async sendRenewalReminder(actor: User, clinicId: string) {

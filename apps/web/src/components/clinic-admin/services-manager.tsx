@@ -158,7 +158,9 @@ export function ServicesManager() {
     const requiredChairTag =
       values.requiredChairTag && values.requiredChairTag !== "any"
         ? values.requiredChairTag
-        : undefined;
+        : editingService
+          ? null
+          : undefined;
     try {
       if (editingService) {
         await updateService({

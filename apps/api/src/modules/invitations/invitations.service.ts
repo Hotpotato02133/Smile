@@ -239,7 +239,11 @@ export class InvitationsService {
     return result;
   }
 
-  async declineByToken(token: string, auth: AuthContext, reason?: string) {
+  async declineByToken(
+    token: string,
+    authorization?: string,
+    reason?: string
+  ) {
     const invitation = await this.prisma.staffInvitation.findUnique({
       where: { token: token.trim() },
     });
@@ -259,6 +263,32 @@ export class InvitationsService {
       );
     }
 
+    let actorUser: { id: string; role: UserRole; email: string } | null = null;
+    const bearer =
+      authorization && authorization.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length).trim()
+        : "";
+    if (bearer) {
+      const identity = await this.clerkService
+        .verifySessionToken(bearer)
+        .catch(() => null);
+      if (identity) {
+        const dbUser = await this.prisma.user.findUnique({
+          where: { clerkId: identity.clerkId },
+          select: { id: true, role: true, email: true },
+        });
+        const callerEmail = (dbUser?.email ?? identity.email ?? "").trim().toLowerCase();
+        if (callerEmail && callerEmail !== invitation.email.trim().toLowerCase()) {
+          throw new DomainException(
+            API_ERROR_CODES.FORBIDDEN,
+            `This invitation was sent to ${invitation.email}. Please sign in with that email or sign out before declining.`,
+            HttpStatus.FORBIDDEN
+          );
+        }
+        actorUser = dbUser;
+      }
+    }
+
     const updated = await this.prisma.staffInvitation.update({
       where: { id: invitation.id },
       data: {
@@ -268,10 +298,10 @@ export class InvitationsService {
       },
     });
 
-    if (auth.user) {
+    if (actorUser) {
       await this.auditService.record({
-        actorUserId: auth.user.id,
-        actorRole: auth.user.role,
+        actorUserId: actorUser.id,
+        actorRole: actorUser.role,
         clinicId: invitation.clinicId,
         actionType: "ROLE_INVITATION_DECLINED",
         targetEntity: "staff_invitations",

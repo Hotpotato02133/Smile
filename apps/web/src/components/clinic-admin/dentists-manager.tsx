@@ -222,7 +222,9 @@ export function DentistsManager() {
     const defaultChairId =
       values.defaultChairId && values.defaultChairId !== "none"
         ? (values.defaultChairId as Id<"chairs">)
-        : undefined;
+        : editingDentistId
+          ? null
+          : undefined;
 
     try {
       if (editingDentistId) {

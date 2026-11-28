@@ -316,6 +316,7 @@ export class JobsService {
     return {
       dateKey,
       clinicsProcessed: clinics.length,
+      clinicsRolledUp: clinics.length,
       mrrPhp,
       totalAppointmentsBooked,
     };

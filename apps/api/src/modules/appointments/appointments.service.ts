@@ -20,6 +20,8 @@ import { toManilaDateKey, toManilaMonthKey } from "../../common/utils/manila-tim
 import { PrismaService } from "../../infra/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { assertClinicCanWriteResource } from "../auth/guards/clinic-quota.guard";
+import { serializeServiceCategory } from "../clinics/clinics.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { SchedulingService } from "../scheduling/scheduling.service";
 import { SlotLockService } from "../scheduling/slot-lock.service";
@@ -28,6 +30,7 @@ import {
   serializePlan,
 } from "../super-admin/super-admin.service";
 import type {
+  CreateMyTimeOffDto,
   CreateWalkInBookingDto,
   RescheduleAppointmentDto,
   StaffAddWaitlistDto,
@@ -99,7 +102,8 @@ export class AppointmentsService {
     private readonly schedulingService: SchedulingService,
     private readonly slotLockService: SlotLockService,
     private readonly auditService: AuditService,
-    private readonly realtime: RealtimeGateway
+    private readonly realtime: RealtimeGateway,
+    private readonly notifications: NotificationsService
   ) {}
 
   /**
@@ -318,11 +322,12 @@ export class AppointmentsService {
       chairName: a.chair.name,
       chairRoomCode: a.chair.roomCode,
       serviceName: a.service.name,
-      serviceCategory: a.service.category,
+      serviceCategory: serializeServiceCategory(a.service.category),
       durationMinutes: a.service.durationMinutes,
       bufferMinutes: a.service.bufferMinutes,
       pricePhp: a.service.pricePhp,
       hasMedicalAlert,
+      medicalHistory: mh,
       medicalSummary: mh
         ? {
             allergies: mh.allergies ?? [],
@@ -337,17 +342,27 @@ export class AppointmentsService {
   async getFrontDeskWorkspace(
     tenant: TenantContext,
     actor: User,
-    dateKey?: string
+    dateKey?: string,
+    rangeStartKey?: string,
+    rangeEndKey?: string
   ) {
     const targetDate = dateKey?.trim() || toManilaDateKey();
+    const rangeStart = rangeStartKey?.trim();
+    const rangeEnd = rangeEndKey?.trim();
     const now = new Date();
-    const [plan, appointmentsRaw, dentists, chairs, services, waitlist, announcements] =
+    const [plan, appointmentsRaw, dentists, chairs, servicesRaw, waitlistRaw, announcements] =
       await Promise.all([
         this.prisma.subscriptionPlan.findUnique({
           where: { id: tenant.clinic.planId },
         }),
         this.prisma.appointment.findMany({
-          where: { clinicId: tenant.clinicId, dateKey: targetDate },
+          where: {
+            clinicId: tenant.clinicId,
+            dateKey:
+              rangeStart && rangeEnd
+                ? { gte: rangeStart, lte: rangeEnd }
+                : targetDate,
+          },
           include: {
             patient: {
               select: {
@@ -397,7 +412,14 @@ export class AppointmentsService {
           },
           include: {
             patient: {
-              select: { id: true, firstName: true, lastName: true, phone: true },
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                phone: true,
+                email: true,
+                noShowCount: true,
+              },
             },
             service: { select: { id: true, name: true, durationMinutes: true } },
             preferredDentist: { select: { id: true, displayName: true } },
@@ -426,6 +448,19 @@ export class AppointmentsService {
     );
 
     const appointments = appointmentsRaw.map((a) => this.enrichAppointmentItem(a));
+    const services = servicesRaw.map((s) => ({
+      ...s,
+      category: serializeServiceCategory(s.category),
+    }));
+    const waitlist = waitlistRaw.map((w) => ({
+      ...w,
+      patientName: `${w.patient.firstName} ${w.patient.lastName}`.trim(),
+      patientPhone: w.patient.phone,
+      patientEmail: w.patient.email ?? null,
+      noShowCount: w.patient.noShowCount,
+      serviceName: w.service.name,
+      preferredDentistName: w.preferredDentist?.displayName ?? null,
+    }));
 
     return {
       dateKey: targetDate,
@@ -444,6 +479,12 @@ export class AppointmentsService {
       pendingRequests: appointments.filter((a) => a.status === "pending_approval"),
       dentists,
       chairs,
+      calendarDentists: dentists,
+      calendarChairs: chairs,
+      emergencyWindow: {
+        enabled: tenant.clinic.emergencyBufferMinutesPerDay > 0,
+        minutesPerDay: tenant.clinic.emergencyBufferMinutesPerDay,
+      },
       services,
       waitlist,
       announcements,
@@ -576,7 +617,19 @@ export class AppointmentsService {
     dto: CreateWalkInBookingDto
   ) {
     let patientId = dto.patientId;
-    if (!patientId && dto.newPatient) {
+    if (patientId) {
+      const existingPatient = await this.prisma.patient.findFirst({
+        where: { id: patientId, clinicId: tenant.clinicId },
+        select: { id: true },
+      });
+      if (!existingPatient) {
+        throw new DomainException(
+          API_ERROR_CODES.NOT_FOUND,
+          "Patient record not found in this clinic.",
+          HttpStatus.NOT_FOUND
+        );
+      }
+    } else if (dto.newPatient) {
       const created = await this.prisma.patient.create({
         data: {
           clinicId: tenant.clinicId,
@@ -598,7 +651,7 @@ export class AppointmentsService {
       patientId = created.id;
     }
 
-    return this.bookSlotAtomically({
+    const appointment = await this.bookSlotAtomically({
       clinic: tenant.clinic,
       patientId: patientId!,
       serviceId: dto.serviceId,
@@ -614,6 +667,27 @@ export class AppointmentsService {
       allowEmergencyBuffer: true,
       minLeadMinutes: -5,
     });
+
+    if (dto.waitlistId) {
+      const linkedWaitlist = await this.prisma.waitlistEntry.findFirst({
+        where: { id: dto.waitlistId, clinicId: tenant.clinicId },
+      });
+      if (linkedWaitlist) {
+        await this.prisma.waitlistEntry.update({
+          where: { id: linkedWaitlist.id },
+          data: { status: "claimed" },
+        });
+        this.realtime.emitWaitlistUpdated({
+          clinicId: tenant.clinicId,
+          dateKey: linkedWaitlist.preferredDateKey,
+        });
+      }
+    }
+
+    return {
+      ...appointment,
+      referenceCode: `SM-${appointment.id.slice(0, 8).toUpperCase()}`,
+    };
   }
 
   async transitionStatus(
@@ -669,15 +743,17 @@ export class AppointmentsService {
         });
       }
 
+      let hygieneRecallScheduledFor: string | null = null;
       if (
         dto.status === AppointmentStatus.completed &&
         existing.service.category === ServiceCategory.Preventive
       ) {
+        hygieneRecallScheduledFor = addSixMonthsDateKey(existing.dateKey);
         await tx.patient.update({
           where: { id: existing.patientId },
           data: {
             lastCleaningDate: existing.dateKey,
-            nextRecallDate: addSixMonthsDateKey(existing.dateKey),
+            nextRecallDate: hygieneRecallScheduledFor,
           },
         });
       }
@@ -699,22 +775,40 @@ export class AppointmentsService {
         tx
       );
 
-      return row;
+      return { row, hygieneRecallScheduledFor };
     });
+
+    let waitlistMatchedCount = 0;
+    if (dto.status === AppointmentStatus.cancelled) {
+      waitlistMatchedCount = await this.prisma.waitlistEntry
+        .count({
+          where: {
+            clinicId: tenant.clinicId,
+            preferredDateKey: updated.row.dateKey,
+            status: "waiting",
+          },
+        })
+        .catch(() => 0);
+    }
 
     this.realtime.emitAppointmentChanged({
       clinicId: tenant.clinicId,
       clinicSlug: tenant.clinic.slug,
-      appointmentId: updated.id,
-      dateKey: updated.dateKey,
-      status: updated.status,
+      appointmentId: updated.row.id,
+      dateKey: updated.row.dateKey,
+      status: updated.row.status,
       action:
         dto.status === AppointmentStatus.cancelled
           ? "cancelled"
           : "status_changed",
     });
 
-    return updated;
+    return {
+      ...updated.row,
+      hygieneRecallScheduledFor: updated.hygieneRecallScheduledFor,
+      waitlistMatchedCount,
+      isPolicyOverride: false,
+    };
   }
 
   async rescheduleAppointment(
@@ -876,6 +970,45 @@ export class AppointmentsService {
       );
     }
 
+    const [patient, service, preferredDentist] = await Promise.all([
+      this.prisma.patient.findFirst({
+        where: { id: dto.patientId, clinicId: tenant.clinicId },
+        select: { id: true },
+      }),
+      this.prisma.service.findFirst({
+        where: { id: dto.serviceId, clinicId: tenant.clinicId },
+        select: { id: true },
+      }),
+      dto.preferredDentistId
+        ? this.prisma.dentist.findFirst({
+            where: { id: dto.preferredDentistId, clinicId: tenant.clinicId },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (!patient) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Patient profile not found in this clinic.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    if (!service) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Dental service not found in this clinic.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+    if (dto.preferredDentistId && !preferredDentist) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Preferred dentist not found in this clinic.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+
     const entry = await this.prisma.waitlistEntry.create({
       data: {
         clinicId: tenant.clinicId,
@@ -894,6 +1027,61 @@ export class AppointmentsService {
     });
 
     return entry;
+  }
+
+  async sendManualWaitlistOffer(tenant: TenantContext, waitlistId: string) {
+    const existing = await this.prisma.waitlistEntry.findFirst({
+      where: { id: waitlistId, clinicId: tenant.clinicId },
+      include: {
+        patient: {
+          select: { firstName: true, lastName: true, email: true },
+        },
+        service: { select: { name: true } },
+      },
+    });
+    if (!existing) {
+      throw new DomainException(
+        API_ERROR_CODES.NOT_FOUND,
+        "Waitlist entry not found.",
+        HttpStatus.NOT_FOUND
+      );
+    }
+
+    const patientName =
+      `${existing.patient.firstName} ${existing.patient.lastName}`.trim();
+    const sentTo = existing.patient.email ?? null;
+
+    if (sentTo) {
+      await this.notifications
+        .sendWaitlistOpeningOffer({
+          clinicId: tenant.clinicId,
+          clinicName: tenant.clinic.name,
+          clinicSlug: tenant.clinic.slug,
+          primaryColorHex: tenant.clinic.primaryColorHex,
+          patientEmail: sentTo,
+          patientName,
+          serviceName: existing.service.name,
+          preferredDateKey: existing.preferredDateKey,
+          waitlistId: existing.id,
+        })
+        .catch(() => undefined);
+    }
+
+    const updated = await this.prisma.waitlistEntry.update({
+      where: { id: existing.id },
+      data: { status: "notified" },
+    });
+
+    this.realtime.emitWaitlistUpdated({
+      clinicId: tenant.clinicId,
+      dateKey: existing.preferredDateKey,
+    });
+
+    return {
+      ...updated,
+      patientName,
+      sentTo,
+    };
   }
 
   async updateWaitlistStatus(
@@ -959,13 +1147,16 @@ export class AppointmentsService {
     actor: User,
     params: { dentistId?: string; startTimeUtc: number; endTimeUtc: number }
   ) {
-    const resolvedDentist = params.dentistId
-      ? await this.prisma.dentist.findFirst({
-          where: { id: params.dentistId, clinicId: tenant.clinicId },
-        })
-      : await this.prisma.dentist.findFirst({
-          where: { userId: actor.id, clinicId: tenant.clinicId },
-        });
+    const canManageAny =
+      actor.role === "clinic_admin" || tenant.isSuperAdminOverride;
+    const resolvedDentist =
+      canManageAny && params.dentistId
+        ? await this.prisma.dentist.findFirst({
+            where: { id: params.dentistId, clinicId: tenant.clinicId },
+          })
+        : await this.prisma.dentist.findFirst({
+            where: { userId: actor.id, clinicId: tenant.clinicId },
+          });
     if (
       !resolvedDentist ||
       !Number.isFinite(params.startTimeUtc) ||
@@ -973,7 +1164,7 @@ export class AppointmentsService {
     ) {
       return [];
     }
-    return this.prisma.appointment.findMany({
+    const rows = await this.prisma.appointment.findMany({
       where: {
         clinicId: tenant.clinicId,
         dentistId: resolvedDentist.id,
@@ -987,25 +1178,28 @@ export class AppointmentsService {
       },
       orderBy: { startTimeUtc: "asc" },
     });
+    return rows.map((r) => ({
+      ...r,
+      patientName: `${r.patient.firstName} ${r.patient.lastName}`.trim(),
+      serviceName: r.service.name,
+    }));
   }
 
   async createMyTimeOff(
     tenant: TenantContext,
     actor: User,
-    body: {
-      dentistId?: string;
-      startTimeUtc: number | string;
-      endTimeUtc: number | string;
-      reason: string;
-    }
+    body: CreateMyTimeOffDto
   ) {
-    const resolvedDentist = body.dentistId
-      ? await this.prisma.dentist.findFirst({
-          where: { id: body.dentistId, clinicId: tenant.clinicId },
-        })
-      : await this.prisma.dentist.findFirst({
-          where: { userId: actor.id, clinicId: tenant.clinicId },
-        });
+    const canManageAny =
+      actor.role === "clinic_admin" || tenant.isSuperAdminOverride;
+    const resolvedDentist =
+      canManageAny && body.dentistId
+        ? await this.prisma.dentist.findFirst({
+            where: { id: body.dentistId, clinicId: tenant.clinicId },
+          })
+        : await this.prisma.dentist.findFirst({
+            where: { userId: actor.id, clinicId: tenant.clinicId },
+          });
     if (!resolvedDentist) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
@@ -1013,36 +1207,61 @@ export class AppointmentsService {
         HttpStatus.NOT_FOUND
       );
     }
-    const start = new Date(body.startTimeUtc);
-    const end = new Date(body.endTimeUtc);
-    if (end.getTime() <= start.getTime()) {
-      throw new DomainException(
-        API_ERROR_CODES.INVALID_INPUT,
-        "endTimeUtc must be after startTimeUtc.",
-        HttpStatus.BAD_REQUEST
-      );
-    }
-    return this.prisma.dentistTimeOff.create({
-      data: {
-        clinicId: tenant.clinicId,
-        dentistId: resolvedDentist.id,
-        startTimeUtc: start,
-        endTimeUtc: end,
-        reason: body.reason?.trim() || "Time off",
-        createdByUserId: actor.id,
-      },
-    });
+    const start = body.startTimeUtc;
+    const end = body.endTimeUtc;
+    const [created, overlappingCount] = await Promise.all([
+      this.prisma.dentistTimeOff.create({
+        data: {
+          clinicId: tenant.clinicId,
+          dentistId: resolvedDentist.id,
+          startTimeUtc: start,
+          endTimeUtc: end,
+          reason: body.reason?.trim() || "Time off",
+          createdByUserId: actor.id,
+        },
+      }),
+      this.prisma.appointment.count({
+        where: {
+          clinicId: tenant.clinicId,
+          dentistId: resolvedDentist.id,
+          status: { notIn: ["cancelled", "no_show", "completed"] },
+          startTimeUtc: { lt: end },
+          endTimeUtc: { gt: start },
+        },
+      }),
+    ]);
+
+    return {
+      ...created,
+      overlappingCount,
+    };
   }
 
-  async removeMyTimeOff(tenant: TenantContext, timeOffId: string) {
+  async removeMyTimeOff(
+    tenant: TenantContext,
+    actor: User,
+    timeOffId: string
+  ) {
     const existing = await this.prisma.dentistTimeOff.findFirst({
       where: { id: timeOffId, clinicId: tenant.clinicId },
+      include: { dentist: { select: { userId: true } } },
     });
     if (!existing) {
       throw new DomainException(
         API_ERROR_CODES.NOT_FOUND,
         "Time-off block not found.",
         HttpStatus.NOT_FOUND
+      );
+    }
+    if (
+      actor.role === "dentist" &&
+      !tenant.isSuperAdminOverride &&
+      existing.dentist.userId !== actor.id
+    ) {
+      throw new DomainException(
+        API_ERROR_CODES.FORBIDDEN,
+        "Dentists can only remove their own time-off blocks.",
+        HttpStatus.FORBIDDEN
       );
     }
     await this.prisma.dentistTimeOff.delete({ where: { id: existing.id } });

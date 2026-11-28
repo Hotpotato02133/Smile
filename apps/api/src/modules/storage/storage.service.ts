@@ -63,6 +63,10 @@ export class StorageService {
     }
   }
 
+  get isConfigured(): boolean {
+    return this.s3 !== null;
+  }
+
   private sanitizeExtension(fileName: string): string {
     const match = /\.([a-zA-Z0-9]{1,8})$/.exec(fileName.trim());
     return match ? match[1].toLowerCase() : "webp";

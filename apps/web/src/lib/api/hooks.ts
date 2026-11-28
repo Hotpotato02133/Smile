@@ -165,17 +165,20 @@ export function useApiPaginatedQuery<TItem = any>(
         typeof endpoint.method === "function"
           ? endpoint.method(mergedArgs)
           : endpoint.method;
-      return executeApiRequest<{
-        items: TItem[];
-        total: number;
-        limit: number;
-        offset: number;
-      }>({
+      const raw = await executeApiRequest<unknown>({
         path: endpoint.buildPath(mergedArgs),
         method,
         query: endpoint.buildQuery?.(mergedArgs),
         token,
       });
+      return (
+        endpoint.transform ? endpoint.transform(raw) : raw
+      ) as {
+        items: TItem[];
+        total: number;
+        limit: number;
+        offset: number;
+      };
     },
     getNextPageParam: (lastPage) => {
       const nextOffset = (lastPage.offset ?? 0) + (lastPage.items?.length ?? 0);
