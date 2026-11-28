@@ -235,6 +235,9 @@ describe("Phase 4: Concurrency Booking, Interval Slot Locks & Real-Time Socket.I
       findFirst: jest.fn(async ({ where }: { where: { id?: string } }) =>
         where.id === SERVICE_ID ? service : null
       ),
+      findUnique: jest.fn(async ({ where }: { where: { id?: string } }) =>
+        where.id === SERVICE_ID ? service : null
+      ),
       findMany: jest.fn(async () => [service]),
     },
     dentistTimeOff: {

@@ -345,6 +345,7 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
       count: jest.fn(async () => 1),
     },
     patient: {
+      findFirst: jest.fn(async () => sampleAppointmentBase.patient),
       findMany: jest.fn(async () => [
         {
           ...sampleAppointmentBase.patient,
@@ -691,6 +692,14 @@ describe("Full-Module Parity & Smoke Suite (e2e)", () => {
     expect(dashRes.body.featuredClinics).toHaveLength(1);
     expect(dashRes.body.appointments[0].clinicSlug).toBe("makati-smile");
     expect(dashRes.body.appointments[0].referenceCode).toMatch(/^SM-/);
+
+    const profilesRes = await request(app.getHttpServer())
+      .get(`/api/v1/patient/clinics/${CLINIC_ID}/profiles`)
+      .set("Authorization", "Bearer patient-token")
+      .expect(200);
+    expect(profilesRes.body.user.email).toBe("juan@example.com");
+    expect(profilesRes.body.user.firstName).toBe("Juan");
+    expect(profilesRes.body.selfProfile.firstName).toBe("Juan");
 
     const summaryRes = await request(app.getHttpServer())
       .get(`/api/v1/patient/clinical-summary?patientId=${PATIENT_ID}`)

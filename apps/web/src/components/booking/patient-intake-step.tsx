@@ -569,25 +569,18 @@ export function PatientIntakeStep({
       ? profileData.dependents.find((d) => d._id === selectedDependentId) ?? null
       : null;
 
+  const effectiveSelfProfile =
+    profileData.selfProfile ?? profileData.fallbackSelfProfile ?? null;
+
   const formKey =
     bookingFor === "self"
-      ? `self-${profileData.selfProfile?._id ?? "new"}`
+      ? `self-${effectiveSelfProfile?._id ?? "new"}-${profileData.user.email}`
       : `dep-${activeDependent?._id ?? "new"}`;
 
   const initialValues =
     bookingFor === "self"
-      ? profileToDefaults(profileData.selfProfile, profileData.user)
-      : profileToDefaults(
-          activeDependent,
-          activeDependent
-            ? null
-            : {
-                firstName: "",
-                lastName: profileData.user.lastName,
-                email: profileData.user.email,
-                phone: profileData.selfProfile?.phone ?? profileData.user.phone,
-              }
-        );
+      ? profileToDefaults(effectiveSelfProfile, profileData.user)
+      : profileToDefaults(activeDependent, null);
 
   return (
     <Card>
@@ -650,7 +643,11 @@ export function PatientIntakeStep({
         <IntakeFormInner
           key={formKey}
           bookingFor={bookingFor}
-          existingPatientId={activeDependent?._id}
+          existingPatientId={
+            bookingFor === "self"
+              ? profileData.selfProfile?._id
+              : activeDependent?._id
+          }
           initialValues={initialValues}
           submitting={submitting}
           onBack={onBack}

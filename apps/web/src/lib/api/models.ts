@@ -305,6 +305,7 @@ export interface AvailableSlotsResult {
 
 export interface MyClinicProfilesResult {
   selfProfile: PatientDoc | null;
+  fallbackSelfProfile?: PatientDoc | null;
   dependents: PatientDoc[];
   user: {
     firstName: string;

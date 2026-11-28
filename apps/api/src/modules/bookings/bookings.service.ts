@@ -415,12 +415,35 @@ export class BookingsService {
   }
 
   async getMyProfilesForClinic(user: User, clinicId: string) {
-    const ownedIds = await this.getOwnedPatientIds(user.id);
-    if (ownedIds.length === 0) return [];
-    return this.prisma.patient.findMany({
-      where: { clinicId, id: { in: ownedIds } },
-      orderBy: { createdAt: "asc" },
-    });
+    const [clinicSelfProfile, fallbackSelfProfile] = await Promise.all([
+      this.prisma.patient.findFirst({
+        where: { clinicId, userId: user.id, guardianPatientId: null },
+        orderBy: { createdAt: "asc" },
+      }),
+      this.prisma.patient.findFirst({
+        where: { userId: user.id, guardianPatientId: null },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    const dependents = clinicSelfProfile
+      ? await this.prisma.patient.findMany({
+          where: { clinicId, guardianPatientId: clinicSelfProfile.id },
+          orderBy: { createdAt: "asc" },
+        })
+      : [];
+
+    return {
+      selfProfile: clinicSelfProfile,
+      fallbackSelfProfile: clinicSelfProfile ? null : fallbackSelfProfile,
+      dependents,
+      user: {
+        firstName: user.firstName ?? "",
+        lastName: user.lastName ?? "",
+        email: user.email ?? "",
+        phone: user.phone ?? "",
+      },
+    };
   }
 
   async createPatientProfile(user: User, dto: CreatePatientProfileDto) {
@@ -435,10 +458,22 @@ export class BookingsService {
       );
     }
 
-    if (dto.guardianPatientId) {
+    const defaultMedicalHistory = {
+      allergies: [],
+      conditions: [],
+      isTakingBloodThinners: false,
+      isPregnant: false,
+      dentalAnxietyLevel: "none" as const,
+    };
+
+    const isDependent =
+      dto.profileKind === "dependent" || Boolean(dto.guardianPatientId);
+
+    let guardianId: string | null = dto.guardianPatientId ?? null;
+    if (guardianId) {
       const guardian = await this.assertPatientOwnedByUser(
         user.id,
-        dto.guardianPatientId
+        guardianId
       );
       if (guardian.clinicId !== clinic.id) {
         throw new DomainException(
@@ -447,29 +482,98 @@ export class BookingsService {
           HttpStatus.BAD_REQUEST
         );
       }
+    } else if (isDependent) {
+      let guardian = await this.prisma.patient.findFirst({
+        where: { clinicId: clinic.id, userId: user.id, guardianPatientId: null },
+      });
+      if (!guardian) {
+        guardian = await this.prisma.patient.create({
+          data: {
+            clinicId: clinic.id,
+            userId: user.id,
+            firstName: user.firstName || "Patient",
+            lastName: user.lastName || "",
+            dateOfBirth: "1990-01-01",
+            sex: "other",
+            phone: user.phone || dto.phone,
+            email: user.email,
+            medicalHistory: defaultMedicalHistory as unknown as Prisma.InputJsonValue,
+          },
+        });
+      }
+      guardianId = guardian.id;
+    }
+
+    if (!isDependent) {
+      const existingSelf = await this.prisma.patient.findFirst({
+        where: { clinicId: clinic.id, userId: user.id, guardianPatientId: null },
+      });
+      const selfRecord = existingSelf
+        ? await this.prisma.patient.update({
+            where: { id: existingSelf.id },
+            data: {
+              firstName: dto.firstName,
+              lastName: dto.lastName,
+              dateOfBirth: dto.dateOfBirth,
+              sex: dto.sex,
+              phone: dto.phone,
+              email: dto.email ?? existingSelf.email ?? user.email,
+              address: dto.address ?? null,
+              emergencyContactName: dto.emergencyContactName ?? null,
+              emergencyContactPhone: dto.emergencyContactPhone ?? null,
+              medicalHistory: (dto.medicalHistory ??
+                defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
+            },
+          })
+        : await this.prisma.patient.create({
+            data: {
+              clinicId: clinic.id,
+              userId: user.id,
+              guardianPatientId: null,
+              firstName: dto.firstName,
+              lastName: dto.lastName,
+              dateOfBirth: dto.dateOfBirth,
+              sex: dto.sex,
+              phone: dto.phone,
+              email: dto.email ?? user.email,
+              address: dto.address ?? null,
+              emergencyContactName: dto.emergencyContactName ?? null,
+              emergencyContactPhone: dto.emergencyContactPhone ?? null,
+              medicalHistory: (dto.medicalHistory ??
+                defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
+            },
+          });
+
+      await this.prisma.user
+        .update({
+          where: { id: user.id },
+          data: {
+            firstName: dto.firstName,
+            lastName: dto.lastName,
+            phone: dto.phone,
+          },
+        })
+        .catch(() => undefined);
+
+      return selfRecord;
     }
 
     return this.prisma.patient.create({
       data: {
         clinicId: clinic.id,
-        userId: dto.guardianPatientId ? null : user.id,
-        guardianPatientId: dto.guardianPatientId ?? null,
+        userId: null,
+        guardianPatientId: guardianId,
         firstName: dto.firstName,
         lastName: dto.lastName,
         dateOfBirth: dto.dateOfBirth,
         sex: dto.sex,
         phone: dto.phone,
-        email: dto.email ?? user.email,
+        email: dto.email ?? null,
         address: dto.address ?? null,
         emergencyContactName: dto.emergencyContactName ?? null,
         emergencyContactPhone: dto.emergencyContactPhone ?? null,
-        medicalHistory: (dto.medicalHistory ?? {
-          allergies: [],
-          conditions: [],
-          isTakingBloodThinners: false,
-          isPregnant: false,
-          dentalAnxietyLevel: "none",
-        }) as unknown as Prisma.InputJsonValue,
+        medicalHistory: (dto.medicalHistory ??
+          defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
       },
     });
   }
@@ -479,10 +583,15 @@ export class BookingsService {
     patientId: string,
     dto: UpdateMedicalProfileDto
   ) {
-    await this.assertPatientOwnedByUser(user.id, patientId);
-    return this.prisma.patient.update({
+    const patient = await this.assertPatientOwnedByUser(user.id, patientId);
+    const updated = await this.prisma.patient.update({
       where: { id: patientId },
       data: {
+        ...(dto.firstName !== undefined ? { firstName: dto.firstName } : {}),
+        ...(dto.lastName !== undefined ? { lastName: dto.lastName } : {}),
+        ...(dto.dateOfBirth !== undefined ? { dateOfBirth: dto.dateOfBirth } : {}),
+        ...(dto.sex !== undefined ? { sex: dto.sex } : {}),
+        ...(dto.email !== undefined ? { email: dto.email } : {}),
         ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
         ...(dto.address !== undefined ? { address: dto.address } : {}),
         ...(dto.emergencyContactName !== undefined
@@ -494,6 +603,21 @@ export class BookingsService {
         medicalHistory: dto.medicalHistory as unknown as Prisma.InputJsonValue,
       },
     });
+
+    if (patient.userId === user.id && !patient.guardianPatientId) {
+      await this.prisma.user
+        .update({
+          where: { id: user.id },
+          data: {
+            ...(dto.firstName !== undefined ? { firstName: dto.firstName } : {}),
+            ...(dto.lastName !== undefined ? { lastName: dto.lastName } : {}),
+            ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    return updated;
   }
 
   async deleteDependentProfile(user: User, patientId: string) {
@@ -540,20 +664,175 @@ export class BookingsService {
       );
     }
 
-    const patient = await this.assertPatientOwnedByUser(user.id, dto.patientId);
-    if (patient.clinicId !== clinic.id) {
-      throw new DomainException(
-        API_ERROR_CODES.FORBIDDEN,
-        "Patient profile does not belong to this clinic.",
-        HttpStatus.FORBIDDEN
-      );
+    const defaultMedicalHistory = {
+      allergies: [],
+      conditions: [],
+      isTakingBloodThinners: false,
+      isPregnant: false,
+      dentalAnxietyLevel: "none" as const,
+    };
+
+    let patient: { id: string; clinicId: string; firstName: string; lastName: string };
+
+    if (dto.patientId) {
+      const existing = await this.assertPatientOwnedByUser(user.id, dto.patientId);
+      if (existing.clinicId !== clinic.id) {
+        throw new DomainException(
+          API_ERROR_CODES.FORBIDDEN,
+          "Patient profile does not belong to this clinic.",
+          HttpStatus.FORBIDDEN
+        );
+      }
+      patient = existing;
+    } else if (dto.bookingFor === "dependent") {
+      if (dto.existingPatientId) {
+        const existingDep = await this.assertPatientOwnedByUser(
+          user.id,
+          dto.existingPatientId
+        );
+        if (existingDep.clinicId !== clinic.id) {
+          throw new DomainException(
+            API_ERROR_CODES.FORBIDDEN,
+            "Dependent profile does not belong to this clinic.",
+            HttpStatus.FORBIDDEN
+          );
+        }
+        patient = dto.patientProfile
+          ? await this.prisma.patient.update({
+              where: { id: existingDep.id },
+              data: {
+                firstName: dto.patientProfile.firstName,
+                lastName: dto.patientProfile.lastName,
+                dateOfBirth: dto.patientProfile.dateOfBirth,
+                sex: dto.patientProfile.sex,
+                phone: dto.patientProfile.phone,
+                email: dto.patientProfile.email ?? existingDep.email,
+                address: dto.patientProfile.address ?? null,
+                emergencyContactName:
+                  dto.patientProfile.emergencyContactName ?? null,
+                emergencyContactPhone:
+                  dto.patientProfile.emergencyContactPhone ?? null,
+                medicalHistory: (dto.patientProfile.medicalHistory ??
+                  defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
+              },
+            })
+          : existingDep;
+      } else {
+        if (!dto.patientProfile) {
+          throw new DomainException(
+            API_ERROR_CODES.INVALID_INPUT,
+            "Patient profile details are required for a new dependent.",
+            HttpStatus.BAD_REQUEST
+          );
+        }
+        let guardian = await this.prisma.patient.findFirst({
+          where: { clinicId: clinic.id, userId: user.id, guardianPatientId: null },
+        });
+        if (!guardian) {
+          guardian = await this.prisma.patient.create({
+            data: {
+              clinicId: clinic.id,
+              userId: user.id,
+              firstName: user.firstName || "Patient",
+              lastName: user.lastName || "",
+              dateOfBirth: "1990-01-01",
+              sex: "other",
+              phone: user.phone || dto.patientProfile.phone,
+              email: user.email,
+              medicalHistory: defaultMedicalHistory as unknown as Prisma.InputJsonValue,
+            },
+          });
+        }
+        patient = await this.prisma.patient.create({
+          data: {
+            clinicId: clinic.id,
+            userId: null,
+            guardianPatientId: guardian.id,
+            firstName: dto.patientProfile.firstName,
+            lastName: dto.patientProfile.lastName,
+            dateOfBirth: dto.patientProfile.dateOfBirth,
+            sex: dto.patientProfile.sex,
+            phone: dto.patientProfile.phone,
+            email: dto.patientProfile.email ?? null,
+            address: dto.patientProfile.address ?? null,
+            emergencyContactName: dto.patientProfile.emergencyContactName ?? null,
+            emergencyContactPhone:
+              dto.patientProfile.emergencyContactPhone ?? null,
+            medicalHistory: (dto.patientProfile.medicalHistory ??
+              defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
+          },
+        });
+      }
+    } else {
+      const existingSelf = await this.prisma.patient.findFirst({
+        where: { clinicId: clinic.id, userId: user.id, guardianPatientId: null },
+      });
+      if (existingSelf && dto.patientProfile) {
+        patient = await this.prisma.patient.update({
+          where: { id: existingSelf.id },
+          data: {
+            firstName: dto.patientProfile.firstName,
+            lastName: dto.patientProfile.lastName,
+            dateOfBirth: dto.patientProfile.dateOfBirth,
+            sex: dto.patientProfile.sex,
+            phone: dto.patientProfile.phone,
+            email: dto.patientProfile.email ?? user.email,
+            address: dto.patientProfile.address ?? null,
+            emergencyContactName: dto.patientProfile.emergencyContactName ?? null,
+            emergencyContactPhone:
+              dto.patientProfile.emergencyContactPhone ?? null,
+            medicalHistory: (dto.patientProfile.medicalHistory ??
+              defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
+          },
+        });
+      } else if (existingSelf) {
+        patient = existingSelf;
+      } else if (dto.patientProfile) {
+        patient = await this.prisma.patient.create({
+          data: {
+            clinicId: clinic.id,
+            userId: user.id,
+            firstName: dto.patientProfile.firstName,
+            lastName: dto.patientProfile.lastName,
+            dateOfBirth: dto.patientProfile.dateOfBirth,
+            sex: dto.patientProfile.sex,
+            phone: dto.patientProfile.phone,
+            email: dto.patientProfile.email ?? user.email,
+            address: dto.patientProfile.address ?? null,
+            emergencyContactName: dto.patientProfile.emergencyContactName ?? null,
+            emergencyContactPhone:
+              dto.patientProfile.emergencyContactPhone ?? null,
+            medicalHistory: (dto.patientProfile.medicalHistory ??
+              defaultMedicalHistory) as unknown as Prisma.InputJsonValue,
+          },
+        });
+      } else {
+        throw new DomainException(
+          API_ERROR_CODES.INVALID_INPUT,
+          "Patient profile details are required to complete booking.",
+          HttpStatus.BAD_REQUEST
+        );
+      }
+
+      if (dto.patientProfile) {
+        await this.prisma.user
+          .update({
+            where: { id: user.id },
+            data: {
+              firstName: dto.patientProfile.firstName,
+              lastName: dto.patientProfile.lastName,
+              phone: dto.patientProfile.phone,
+            },
+          })
+          .catch(() => undefined);
+      }
     }
 
     const initialStatus = clinic.requireBookingApproval
       ? AppointmentStatus.pending_approval
       : AppointmentStatus.confirmed;
 
-    return this.appointmentsService.bookSlotAtomically({
+    const created = await this.appointmentsService.bookSlotAtomically({
       clinic,
       patientId: patient.id,
       serviceId: dto.serviceId,
@@ -570,6 +849,36 @@ export class BookingsService {
       allowEmergencyBuffer: false,
       minLeadMinutes: 15,
     });
+
+    const [service, dentist, chair] = await Promise.all([
+      this.prisma.service.findFirst({
+        where: { id: created.serviceId, clinicId: clinic.id },
+        select: { name: true, pricePhp: true },
+      }),
+      this.prisma.dentist.findUnique({
+        where: { id: created.dentistId },
+        select: { displayName: true },
+      }),
+      this.prisma.chair.findUnique({
+        where: { id: created.chairId },
+        select: { name: true },
+      }),
+    ]);
+
+    return {
+      ...created,
+      appointmentId: created.id,
+      referenceCode: `SM-${created.id.slice(0, 8).toUpperCase()}`,
+      patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+      clinicName: clinic.name,
+      clinicAddress: `${clinic.address}, ${clinic.city}, ${clinic.province}`,
+      clinicPhone: clinic.phone,
+      cancellationWindowHours: clinic.cancellationWindowHours,
+      serviceName: service?.name ?? "Dental Visit",
+      pricePhp: service?.pricePhp ?? 0,
+      dentistName: dentist?.displayName ?? "Assigned Dentist",
+      chairName: chair?.name ?? "Operatory Chair",
+    };
   }
 
   async cancelMyAppointment(
